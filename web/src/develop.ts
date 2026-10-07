@@ -105,6 +105,8 @@ export function developNegative(
   source: HTMLCanvasElement,
   adjust: Adjust = DEFAULT_ADJUST,
   spots: Spot[] = [],
+  /** true: la imagen ya es una foto normal; no se invierte ni se normaliza el color. */
+  positive = false,
 ): HTMLCanvasElement {
   const out = document.createElement('canvas')
   out.width = source.width
@@ -138,6 +140,12 @@ export function developNegative(
   // 2. Niveles por canal + inversion (valores 0..1).
   const levels: Float32Array[] = []
   for (let c = 0; c < 3; c++) {
+    if (positive) {
+      const identity = new Float32Array(256)
+      for (let v = 0; v < 256; v++) identity[v] = v / 255
+      levels.push(identity)
+      continue
+    }
     let low = 0
     let acc = 0
     while (low < 255 && acc + hist[c][low] <= clip) acc += hist[c][low++]
@@ -170,11 +178,16 @@ export function developNegative(
 
   // 3. Exposicion automatica: gamma que lleva la luminosidad media al objetivo.
   const target = Math.min(Math.max(0.45 + adjust.exposure * 0.2, 0.15), 0.8)
-  const exponent = Math.min(Math.max(Math.log(target) / Math.log(Math.max(lum, 0.02)), 0.4), 2.5)
+  // En una foto normal el brillo solo se desplaza segun el ajuste, sin normalizar.
+  const exponent = positive
+    ? Math.pow(2, -adjust.exposure)
+    : Math.min(Math.max(Math.log(target) / Math.log(Math.max(lum, 0.02)), 0.4), 2.5)
 
   // Balance de blancos (mundo gris) aplicado al 70 %, mas el ajuste calido/frio.
   const grayMean = (mean[0] + mean[1] + mean[2]) / 3
-  const gains = mean.map((m) => Math.min(Math.max(Math.pow(grayMean / Math.max(m, 0.02), 0.7), 0.6), 1.6))
+  const gains = positive
+    ? [1, 1, 1]
+    : mean.map((m) => Math.min(Math.max(Math.pow(grayMean / Math.max(m, 0.02), 0.7), 0.6), 1.6))
   gains[0] *= 1 + 0.15 * adjust.warmth
   gains[2] *= 1 - 0.15 * adjust.warmth
 
@@ -470,7 +483,7 @@ function healSpots(data: Uint8ClampedArray, w: number, h: number, spots: Spot[])
  * Automejora: revela con ajustes neutros, mide la imagen (rango tonal, zonas oscuras y quemadas,
  * color y ruido) y devuelve ajustes razonables para ella.
  */
-export function autoAdjust(source: HTMLCanvasElement): Adjust {
+export function autoAdjust(source: HTMLCanvasElement, positive = false): Adjust {
   const neutral: Adjust = {
     exposure: 0, contrast: 1, warmth: 0, saturation: 1,
     noiseLuma: 0, noiseColor: 0, sharpness: 0, shadows: 0, highlights: 0, dust: 0,
@@ -481,7 +494,7 @@ export function autoAdjust(source: HTMLCanvasElement): Adjust {
   small.height = Math.max(1, Math.round(source.height * scale))
   small.getContext('2d')?.drawImage(source, 0, 0, small.width, small.height)
 
-  const developed = developNegative(small, neutral)
+  const developed = developNegative(small, neutral, [], positive)
   const ctx = developed.getContext('2d', { willReadFrequently: true })
   if (!ctx) return { ...DEFAULT_ADJUST }
   const { data } = ctx.getImageData(0, 0, developed.width, developed.height)
@@ -522,8 +535,18 @@ export function autoAdjust(source: HTMLCanvasElement): Adjust {
   noise /= n
 
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi)
+
+  // En una foto normal el brillo no se auto-normaliza al revelar: se corrige aqui hacia una media de 0.45.
+  let exposure = 0
+  if (positive) {
+    let sum = 0
+    for (let p = 0; p < n; p++) sum += Y[p]
+    const meanLuma = clamp(sum / n / 255, 0.03, 0.97)
+    exposure = clamp(-Math.log2(Math.log(0.45) / Math.log(meanLuma)), -1, 1)
+  }
+
   return {
-    exposure: 0,
+    exposure,
     contrast: range < 200 ? clamp(1 + (200 - range) / 200, 1.05, 1.6) : 1.1,
     warmth: 0,
     saturation: chroma < 20 ? 1.35 : chroma < 35 ? 1.2 : 1.05,

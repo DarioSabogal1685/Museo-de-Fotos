@@ -6,8 +6,55 @@ export interface Photo {
 	id: string;
 	name: string;
 	createdTime: string;
+	/** Cambia cuando la foto se edita; la web lo usa para no mostrar una version vieja en cache. */
+	modifiedTime?: string;
 	width?: number;
 	height?: number;
+	/** Personas marcadas y lugar; se guardan en la descripcion del archivo de Drive. */
+	tags?: PhotoTags;
+}
+
+export interface PersonTag {
+	name: string;
+	/** Posicion del punto sobre la foto, de 0 a 1. */
+	x: number;
+	y: number;
+}
+
+export interface PhotoTags {
+	place?: string;
+	people: PersonTag[];
+}
+
+const TAGS_PREFIX = "museo:";
+const MAX_PEOPLE = 60;
+
+/** Valida y limpia etiquetas recibidas (o leidas de Drive); devuelve null si no tienen forma valida. */
+export function sanitizeTags(input: unknown): PhotoTags | null {
+	if (typeof input !== "object" || input === null) return null;
+	const raw = input as { place?: unknown; people?: unknown };
+	const people: PersonTag[] = [];
+	if (Array.isArray(raw.people)) {
+		for (const p of raw.people.slice(0, MAX_PEOPLE)) {
+			const item = p as { name?: unknown; x?: unknown; y?: unknown };
+			const name = typeof item?.name === "string" ? item.name.trim().slice(0, 60) : "";
+			const x = Number(item?.x);
+			const y = Number(item?.y);
+			if (!name || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+			people.push({ name, x: Math.min(Math.max(x, 0), 1), y: Math.min(Math.max(y, 0), 1) });
+		}
+	}
+	const place = typeof raw.place === "string" ? raw.place.trim().slice(0, 100) : "";
+	return place ? { place, people } : { people };
+}
+
+function parseTags(description?: string): PhotoTags | undefined {
+	if (!description?.startsWith(TAGS_PREFIX)) return undefined;
+	try {
+		return sanitizeTags(JSON.parse(description.slice(TAGS_PREFIX.length))) ?? undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export interface Room {
@@ -20,6 +67,8 @@ interface DriveFile {
 	name: string;
 	mimeType: string;
 	createdTime: string;
+	modifiedTime?: string;
+	description?: string;
 	parents?: string[];
 	thumbnailLink?: string;
 	imageMediaMetadata?: { width?: number; height?: number };
@@ -65,8 +114,10 @@ function toPhoto(f: DriveFile): Photo {
 		id: f.id,
 		name: f.name,
 		createdTime: f.createdTime,
+		modifiedTime: f.modifiedTime,
 		width: f.imageMediaMetadata?.width,
 		height: f.imageMediaMetadata?.height,
+		tags: parseTags(f.description),
 	};
 }
 
@@ -121,7 +172,7 @@ export async function listPhotos(env: Env, roomId: string): Promise<Photo[] | nu
 	do {
 		const params = new URLSearchParams({
 			q: `'${roomId}' in parents and mimeType contains 'image/' and trashed = false`,
-			fields: "nextPageToken,files(id,name,mimeType,createdTime,imageMediaMetadata(width,height))",
+			fields: "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,description,imageMediaMetadata(width,height))",
 			orderBy: "createdTime desc",
 			pageSize: "1000",
 		});
@@ -172,26 +223,109 @@ export async function getPhotoThumbnail(env: Env, id: string, width: number): Pr
 	});
 }
 
-export async function uploadPhoto(env: Env, roomId: string, file: File): Promise<Photo | null> {
-	if (!(await isRoom(env, roomId))) return null;
+const PHOTO_FIELDS = "id,name,mimeType,createdTime,modifiedTime,description,imageMediaMetadata(width,height)";
+
+/** Cuerpo multipart/related de Drive: metadatos JSON + contenido del archivo. */
+function multipartBody(metadata: object, file: File) {
 	const boundary = `museo-${crypto.randomUUID()}`;
-	const metadata = JSON.stringify({ name: file.name, parents: [roomId] });
 	const body = new Blob([
-		`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
+		`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
 		`--${boundary}\r\nContent-Type: ${file.type}\r\n\r\n`,
 		file,
 		`\r\n--${boundary}--`,
 	]);
-	const params = new URLSearchParams({
-		uploadType: "multipart",
-		fields: "id,name,mimeType,createdTime,imageMediaMetadata(width,height)",
-	});
+	return { body, contentType: `multipart/related; boundary=${boundary}` };
+}
+
+export async function uploadPhoto(env: Env, roomId: string, file: File): Promise<Photo | null> {
+	if (!(await isRoom(env, roomId))) return null;
+	const { body, contentType } = multipartBody({ name: file.name, parents: [roomId] }, file);
+	const params = new URLSearchParams({ uploadType: "multipart", fields: PHOTO_FIELDS });
 	const res = await driveFetch(env, `${DRIVE_UPLOAD}?${params}`, {
 		method: "POST",
-		headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+		headers: { "Content-Type": contentType },
 		body,
 	});
 	if (!res.ok) throw new Error(`Drive upload fallo (${res.status})`);
+	return toPhoto((await res.json()) as DriveFile);
+}
+
+/** Cambia el nombre y/o las etiquetas (personas y lugar) de una foto, sin tocar la imagen. */
+export async function updatePhotoMeta(
+	env: Env,
+	id: string,
+	changes: { name?: string; tags?: PhotoTags },
+): Promise<Photo | null> {
+	if (!(await getPhotoMeta(env, id))) return null;
+	const body: { name?: string; description?: string } = {};
+	if (changes.name) body.name = changes.name;
+	if (changes.tags) body.description = `${TAGS_PREFIX}${JSON.stringify(changes.tags)}`;
+	const params = new URLSearchParams({ fields: PHOTO_FIELDS });
+	const res = await driveFetch(env, `${DRIVE_API}/files/${encodeURIComponent(id)}?${params}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!res.ok) throw new Error(`Drive actualizar fallo (${res.status})`);
+	cachedSuggestions = null;
+	return toPhoto((await res.json()) as DriveFile);
+}
+
+// Sugerencias para el texto predictivo, cacheadas un minuto; no dependen de la peticion.
+let cachedSuggestions: { value: TagSuggestions; expiresAt: number } | null = null;
+
+export interface TagSuggestions {
+	people: string[];
+	places: string[];
+}
+
+/** Nombres y lugares ya guardados en todas las fotos, de mas a menos usados. */
+export async function listTagSuggestions(env: Env): Promise<TagSuggestions> {
+	if (cachedSuggestions && cachedSuggestions.expiresAt > Date.now()) return cachedSuggestions.value;
+	const rooms = await listRooms(env);
+	const people = new Map<string, number>();
+	const places = new Map<string, number>();
+
+	if (rooms.length > 0) {
+		const parents = rooms.map((r) => `'${r.id}' in parents`).join(" or ");
+		let pageToken: string | undefined;
+		do {
+			const params = new URLSearchParams({
+				q: `(${parents}) and mimeType contains 'image/' and trashed = false`,
+				fields: "nextPageToken,files(description)",
+				pageSize: "1000",
+			});
+			if (pageToken) params.set("pageToken", pageToken);
+			const res = await driveFetch(env, `${DRIVE_API}/files?${params}`);
+			if (!res.ok) throw new Error(`Drive sugerencias fallo (${res.status})`);
+			const data = (await res.json()) as { files: { description?: string }[]; nextPageToken?: string };
+			for (const f of data.files) {
+				const tags = parseTags(f.description);
+				if (!tags) continue;
+				if (tags.place) places.set(tags.place, (places.get(tags.place) ?? 0) + 1);
+				for (const p of tags.people) people.set(p.name, (people.get(p.name) ?? 0) + 1);
+			}
+			pageToken = data.nextPageToken;
+		} while (pageToken);
+	}
+
+	const sorted = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
+	const value = { people: sorted(people), places: sorted(places) };
+	cachedSuggestions = { value, expiresAt: Date.now() + 60_000 };
+	return value;
+}
+
+/** Reemplaza la imagen de una foto existente (y opcionalmente su nombre). */
+export async function replacePhoto(env: Env, id: string, file: File, name?: string): Promise<Photo | null> {
+	if (!(await getPhotoMeta(env, id))) return null;
+	const { body, contentType } = multipartBody(name ? { name } : {}, file);
+	const params = new URLSearchParams({ uploadType: "multipart", fields: PHOTO_FIELDS });
+	const res = await driveFetch(env, `${DRIVE_UPLOAD}/${encodeURIComponent(id)}?${params}`, {
+		method: "PATCH",
+		headers: { "Content-Type": contentType },
+		body,
+	});
+	if (!res.ok) throw new Error(`Drive reemplazar fallo (${res.status})`);
 	return toPhoto((await res.json()) as DriveFile);
 }
 

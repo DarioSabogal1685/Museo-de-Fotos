@@ -4,7 +4,11 @@ import {
 	getPhotoThumbnail,
 	listPhotos,
 	listRooms,
+	listTagSuggestions,
+	replacePhoto,
+	sanitizeTags,
 	trashPhoto,
+	updatePhotoMeta,
 	uploadPhoto,
 } from "./drive";
 
@@ -14,7 +18,7 @@ const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/g
 function corsHeaders(env: Env): Record<string, string> {
 	return {
 		"Access-Control-Allow-Origin": env.ALLOWED_ORIGIN,
-		"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+		"Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 		"Access-Control-Allow-Headers": "Authorization, Content-Type",
 		Vary: "Origin",
 	};
@@ -71,6 +75,10 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 		return json(env, await listRooms(env), 200, { "Cache-Control": "public, max-age=60" });
 	}
 
+	if (pathname === "/api/tags" && request.method === "GET") {
+		return json(env, await listTagSuggestions(env), 200, { "Cache-Control": "public, max-age=30" });
+	}
+
 	if (pathname === "/api/rooms" && request.method === "POST") {
 		if (!(await isAdmin(request, env))) return json(env, { error: "No autorizado" }, 401);
 		const body = (await request.json().catch(() => null)) as { name?: unknown } | null;
@@ -120,6 +128,38 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 				return cachedImage(request, env, ctx, () => getPhotoThumbnail(env, id, width));
 			}
 			return cachedImage(request, env, ctx, () => getPhotoContent(env, id));
+		}
+
+		// Cambiar nombre y/o etiquetas: PATCH con JSON { name?, tags? }.
+		if (request.method === "PATCH" && !isThumb) {
+			if (!(await isAdmin(request, env))) return json(env, { error: "No autorizado" }, 401);
+			const body = (await request.json().catch(() => null)) as { name?: unknown; tags?: unknown } | null;
+			const name = typeof body?.name === "string" ? body.name.trim().slice(0, 120) : "";
+			const tags = body?.tags === undefined ? undefined : sanitizeTags(body.tags);
+			if (body?.tags !== undefined && !tags) return json(env, { error: "Etiquetas no validas" }, 400);
+			if (!name && !tags) return json(env, { error: "Nada que actualizar" }, 400);
+			const photo = await updatePhotoMeta(env, id, { name: name || undefined, tags: tags ?? undefined });
+			return photo ? json(env, photo) : json(env, { error: "Foto no encontrada" }, 404);
+		}
+
+		// Reemplazar la imagen: PUT con formulario { file, name? }.
+		if (request.method === "PUT" && !isThumb) {
+			if (!(await isAdmin(request, env))) return json(env, { error: "No autorizado" }, 401);
+			const length = Number(request.headers.get("Content-Length") ?? 0);
+			if (length > MAX_UPLOAD_BYTES + 1024 * 1024) {
+				return json(env, { error: "Archivo demasiado grande (maximo 25 MB)" }, 413);
+			}
+			const form = await request.formData();
+			const file = form.get("file");
+			const rawName = form.get("name");
+			if (!(file instanceof File)) return json(env, { error: "Falta el campo 'file'" }, 400);
+			if (!ALLOWED_TYPES.has(file.type)) return json(env, { error: "Tipo de imagen no permitido" }, 415);
+			if (file.size > MAX_UPLOAD_BYTES) {
+				return json(env, { error: "Archivo demasiado grande (maximo 25 MB)" }, 413);
+			}
+			const name = typeof rawName === "string" ? rawName.trim().slice(0, 120) : "";
+			const photo = await replacePhoto(env, id, file, name || undefined);
+			return photo ? json(env, photo) : json(env, { error: "Foto no encontrada" }, 404);
 		}
 
 		if (request.method === "DELETE" && !isThumb) {

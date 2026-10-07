@@ -3,10 +3,30 @@ export interface Room {
   name: string
 }
 
+export interface PersonTag {
+  name: string
+  /** Posicion del punto sobre la foto, de 0 a 1. */
+  x: number
+  y: number
+}
+
+export interface PhotoTags {
+  place?: string
+  people: PersonTag[]
+}
+
+export interface TagSuggestions {
+  people: string[]
+  places: string[]
+}
+
 export interface Photo {
   id: string
   name: string
   createdTime: string
+  tags?: PhotoTags
+  /** Cambia al editar la foto; se usa para saltarse la cache del navegador. */
+  modifiedTime?: string
   width?: number
   height?: number
 }
@@ -34,9 +54,12 @@ function demoImage(id: string, w: number, h: number): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
 }
 
-export const thumbUrl = (id: string, w = 400) =>
-  DEMO ? demoImage(id, w, w) : `${API}/api/photos/${id}/thumb?w=${w}`
-export const photoUrl = (id: string) => (DEMO ? demoImage(id, 1600, 1066) : `${API}/api/photos/${id}`)
+const version = (v?: string) => (v ? `&v=${encodeURIComponent(v)}` : '')
+
+export const thumbUrl = (id: string, w = 400, v?: string) =>
+  DEMO ? demoImage(id, w, w) : `${API}/api/photos/${id}/thumb?w=${w}${version(v)}`
+export const photoUrl = (id: string, v?: string) =>
+  DEMO ? demoImage(id, 1600, 1066) : `${API}/api/photos/${id}?${version(v).slice(1)}`
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, init)
@@ -82,6 +105,43 @@ export function uploadPhoto(roomId: string, file: File, token: string) {
     headers: auth(token),
     body,
   })
+}
+
+export function deletePhoto(id: string, token: string) {
+  if (DEMO) return demoOnly()
+  return request<{ ok: true }>(`/api/photos/${id}`, { method: 'DELETE', headers: auth(token) })
+}
+
+/** Cambia el nombre y/o las etiquetas (personas y lugar) sin tocar la imagen. */
+export function updatePhotoMeta(id: string, changes: { name?: string; tags?: PhotoTags }, token: string) {
+  if (DEMO) return demoOnly()
+  return request<Photo>(`/api/photos/${id}`, {
+    method: 'PATCH',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  })
+}
+
+/** Nombres y lugares ya guardados, para el texto predictivo. */
+export const fetchTagSuggestions = (): Promise<TagSuggestions> =>
+  DEMO
+    ? Promise.resolve({ people: ['Ana', 'Luis', 'María'], places: ['Casa', 'Playa', 'Bogotá'] })
+    : request<TagSuggestions>('/api/tags')
+
+/** Reemplaza la imagen de una foto existente (y opcionalmente su nombre). */
+export function replacePhoto(id: string, file: File, name: string, token: string) {
+  if (DEMO) return demoOnly()
+  const body = new FormData()
+  body.append('file', file)
+  body.append('name', name)
+  return request<Photo>(`/api/photos/${id}`, { method: 'PUT', headers: auth(token), body })
+}
+
+/** Descarga la foto completa para editarla. */
+export async function fetchPhotoBlob(id: string, v?: string): Promise<Blob> {
+  const res = await fetch(photoUrl(id, v))
+  if (!res.ok) throw new Error('No se pudo descargar la foto')
+  return res.blob()
 }
 
 /** Olvida la clave guardada (por ejemplo, si el servidor la rechazo). */

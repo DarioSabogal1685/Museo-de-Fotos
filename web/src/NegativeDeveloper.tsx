@@ -27,12 +27,12 @@ const LIGHT_MESSAGES: Record<LightState, string> = {
   good: 'Luz correcta. Mantén quieto el celular y pulsa «Capturar».',
 }
 
-const MAX_SIDE = 3200
-const PREVIEW_SIDE = 1000
-const FULL_CROP: Crop = { x: 0, y: 0, w: 1, h: 1 }
-const LOW_RES_WIDTH = 1200
+export const MAX_SIDE = 3200
+export const PREVIEW_SIDE = 1000
+export const FULL_CROP: Crop = { x: 0, y: 0, w: 1, h: 1 }
+export const LOW_RES_WIDTH = 1200
 
-const RATIOS: { key: string; label: string; value: number | null }[] = [
+export const RATIOS: { key: string; label: string; value: number | null }[] = [
   { key: 'free', label: 'Libre', value: null },
   { key: '1:1', label: '1:1', value: 1 },
   { key: '3:2', label: '3:2', value: 3 / 2 },
@@ -40,7 +40,7 @@ const RATIOS: { key: string; label: string; value: number | null }[] = [
   { key: '16:9', label: '16:9', value: 16 / 9 },
 ]
 
-const SLIDERS: { key: keyof Adjust; label: string; min: number; max: number; step: number }[] = [
+export const SLIDERS: { key: keyof Adjust; label: string; min: number; max: number; step: number }[] = [
   { key: 'exposure', label: 'Brillo', min: -1, max: 1, step: 0.05 },
   { key: 'contrast', label: 'Contraste', min: 0, max: 2, step: 0.05 },
   { key: 'shadows', label: 'Sombras', min: -1, max: 1, step: 0.05 },
@@ -63,7 +63,7 @@ interface Captured {
   preview: HTMLCanvasElement
 }
 
-function scaled(source: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
+export function scaled(source: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   const scale = Math.min(1, maxSide / Math.max(source.width, source.height))
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(source.width * scale)
@@ -72,7 +72,7 @@ function scaled(source: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
   return canvas
 }
 
-const toBlob = (canvas: HTMLCanvasElement) =>
+export const toBlob = (canvas: HTMLCanvasElement) =>
   new Promise<Blob>((resolve, reject) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo crear la imagen'))), 'image/jpeg', 0.93),
   )
