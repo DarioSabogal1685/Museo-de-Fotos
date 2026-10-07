@@ -1,45 +1,50 @@
 # Museo de Fotos
 
-Aplicación para exhibir y organizar fotografías como si fueran las salas de un museo.
+Galería de fotos en forma de casa: el usuario recorre un pasillo y entra a cada cuarto, y cada cuarto es una galería.
 
-## Descripción
+**Demo:** https://dariosabogal1685.github.io/Museo-de-Fotos/
 
-Museo de Fotos es un proyecto para crear una galería de fotos donde las imágenes se presenten en colecciones y se puedan recorrer de forma sencilla.
+## Cómo funciona
 
-> Este proyecto está en etapa inicial. Esta sección se actualizará a medida que avance el desarrollo.
+- **Casa:** plano visto desde arriba con un pasillo central. Te mueves con las flechas o WASD, o con clic, y entras a un cuarto empujando hacia su puerta, con Enter o con clic.
+- **Cuartos:** cada cuarto es una subcarpeta de una carpeta de Google Drive. Las fotos de esa subcarpeta forman la galería.
+- **Backend:** un Cloudflare Worker (`worker/`) lee y sube fotos a Drive con tu cuenta de Google, sin exponer claves en el navegador.
+- **Web:** React + Vite (`web/`), publicada en GitHub Pages.
 
-## Características previstas
+Sin backend configurado la web funciona en **modo demo**, con cuartos y fotos de ejemplo.
 
-- Galería de fotos organizada por colecciones o salas
-- Vista ampliada de cada fotografía con título y descripción
-- Navegación sencilla entre imágenes
-- Diseño adaptable a móvil y escritorio
-
-## Instalación
-
-```bash
-git clone https://github.com/DarioSabogal1685/Museo-de-Fotos.git
-cd Museo-de-Fotos
-```
-
-## Uso
-
-Las instrucciones de uso se añadirán cuando exista una primera versión funcional.
-
-## Estructura del proyecto
+## Estructura
 
 ```
 Museo-de-Fotos/
-└── README.md
+├── web/      # React + Vite (la casa y las galerías)
+├── worker/   # Cloudflare Worker (API sobre Google Drive)
+└── .github/workflows/deploy.yml   # publica web/ en GitHub Pages
 ```
 
-## Contribuir
+## Ejecutar en local
 
-1. Haz un fork del repositorio
-2. Crea una rama para tu cambio: `git checkout -b mi-cambio`
-3. Haz commit de tus cambios: `git commit -m "Describe el cambio"`
-4. Sube la rama: `git push origin mi-cambio`
-5. Abre un Pull Request
+Requiere Node.js 20 o superior.
+
+```bash
+cd web
+npm install
+npm run dev        # http://localhost:5173 (modo demo)
+```
+
+## Conectar Google Drive
+
+1. Crea una carpeta en Drive para el museo. Sus subcarpetas serán los cuartos.
+2. En Google Cloud, activa la **Drive API**, crea credenciales OAuth y obtén un refresh token con tu cuenta.
+3. Copia `worker/.dev.vars.example` a `worker/.dev.vars` y rellena `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `DRIVE_FOLDER_ID` y `ADMIN_TOKEN` (una clave que inventes).
+4. Arranca el Worker y la web:
+
+```bash
+cd worker && npm install && npm run dev     # http://localhost:8787
+cd web && cp .env.example .env.local        # y activa VITE_API_URL
+```
+
+Para producción, despliega con `npm run deploy` en `worker/`, guarda los secretos con `wrangler secret put` y define la variable `VITE_API_URL` del repositorio con la URL del Worker.
 
 ## Autor
 
