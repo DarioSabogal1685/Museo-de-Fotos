@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import Menu from './Menu'
 import { fetchPhotos, getAdminToken, photoUrl, thumbUrl, uploadPhoto, type Photo, type Room } from './api'
 
 interface Props {
@@ -60,20 +61,23 @@ export default function RoomView({ room, onBack }: Props) {
       <div className="toolbar">
         <button className="btn" onClick={onBack}>← Volver al pasillo</button>
         <h2>{room.name}</h2>
-        <label className="btn primary">
-          {uploading ? 'Subiendo…' : 'Subir fotos'}
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
-            multiple
-            hidden
-            disabled={uploading}
-            onChange={(e) => {
-              onUpload(e.target.files)
-              e.target.value = ''
-            }}
-          />
-        </label>
+        <div className="actions">
+          <label className="btn primary">
+            {uploading ? 'Subiendo…' : 'Subir fotos'}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
+              multiple
+              hidden
+              disabled={uploading}
+              onChange={(e) => {
+                onUpload(e.target.files)
+                e.target.value = ''
+              }}
+            />
+          </label>
+          <Menu />
+        </div>
       </div>
 
       {error && <p className="message error">{error}</p>}

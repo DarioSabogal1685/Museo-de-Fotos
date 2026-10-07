@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createRoom, fetchRooms, getAdminToken, type Room } from './api'
 import House from './House'
+import Menu from './Menu'
 import RoomView from './RoomView'
 
 export default function App() {
@@ -39,7 +40,10 @@ export default function App() {
     <>
       <header className="header">
         <h1>Museo de Fotos</h1>
-        <button className="btn primary" onClick={onNewRoom}>Nuevo cuarto</button>
+        <div className="actions">
+          <button className="btn primary" onClick={onNewRoom}>Nuevo cuarto</button>
+          <Menu />
+        </div>
       </header>
       {error && <p className="message error">{error}</p>}
       {loading && <p className="message">Cargando…</p>}
