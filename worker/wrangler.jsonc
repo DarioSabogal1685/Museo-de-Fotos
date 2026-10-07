@@ -8,8 +8,9 @@
     "logs": { "enabled": true, "head_sampling_rate": 1 }
   },
   "vars": {
-    // Origen de la web que puede llamar a la API (CORS). Cambialo al desplegar.
-    "ALLOWED_ORIGIN": "http://localhost:5173"
+    // Origen de la web que puede llamar a la API (CORS): solo el dominio, sin ruta.
+    // En local se sobrescribe con ALLOWED_ORIGIN=http://localhost:5173 en worker/.dev.vars
+    "ALLOWED_ORIGIN": "https://dariosabogal1685.github.io"
   }
   // Secretos (wrangler secret put): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
   // GOOGLE_REFRESH_TOKEN, DRIVE_FOLDER_ID, ADMIN_TOKEN
