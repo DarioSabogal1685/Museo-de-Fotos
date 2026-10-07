@@ -170,3 +170,36 @@ export function developNegative(source: HTMLCanvasElement, adjust: Adjust = DEFA
   ctx.putImageData(image, 0, 0)
   return out
 }
+
+/** Rota un canvas (grados, en sentido horario). Los huecos de las esquinas se rellenan en gris. */
+export function rotateCanvas(src: HTMLCanvasElement, degrees: number): HTMLCanvasElement {
+  const deg = ((degrees % 360) + 360) % 360
+  if (deg === 0) return src
+  const rad = (deg * Math.PI) / 180
+  const cos = Math.abs(Math.cos(rad))
+  const sin = Math.abs(Math.sin(rad))
+  const out = document.createElement('canvas')
+  out.width = Math.max(1, Math.round(src.width * cos + src.height * sin))
+  out.height = Math.max(1, Math.round(src.width * sin + src.height * cos))
+  const ctx = out.getContext('2d')
+  if (!ctx) throw new Error('No se pudo girar la imagen')
+  ctx.fillStyle = '#808080'
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.translate(out.width / 2, out.height / 2)
+  ctx.rotate(rad)
+  ctx.drawImage(src, -src.width / 2, -src.height / 2)
+  return out
+}
+
+/** Recorta un canvas con un rectangulo normalizado (0..1). */
+export function cropCanvas(src: HTMLCanvasElement, crop: { x: number; y: number; w: number; h: number }): HTMLCanvasElement {
+  const sx = Math.round(crop.x * src.width)
+  const sy = Math.round(crop.y * src.height)
+  const sw = Math.max(1, Math.min(Math.round(crop.w * src.width), src.width - sx))
+  const sh = Math.max(1, Math.min(Math.round(crop.h * src.height), src.height - sy))
+  const out = document.createElement('canvas')
+  out.width = sw
+  out.height = sh
+  out.getContext('2d')?.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh)
+  return out
+}
