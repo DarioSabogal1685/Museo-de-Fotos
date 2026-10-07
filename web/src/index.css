@@ -174,3 +174,38 @@ button.menu-item:hover { background: #342c26; }
 .chips .btn { padding: .45rem .8rem; }
 .btn.whatsapp { background: #25d366; color: #0b2a17; border-color: #25d366; font-weight: 600; padding: .7rem 1rem; }
 .hint { margin: 0; text-align: center; color: var(--muted); font-size: .9rem; }
+
+/* --- Camara a pantalla completa --- */
+.cam-full { position: fixed; inset: 0; z-index: 50; background: #000; overflow: hidden; }
+.cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cam-full .camera-overlay { position: absolute; inset: 0; background: #000a; display: grid; place-items: center; font-weight: 600; z-index: 3; }
+.cam-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: flex-start; gap: .75rem;
+  padding: max(.75rem, env(safe-area-inset-top)) .75rem 2rem;
+  background: linear-gradient(#000a, transparent);
+}
+.cam-hint { flex: 1; margin: 0; padding-top: .45rem; font-weight: 600; font-size: .95rem; text-shadow: 0 1px 4px #000; text-align: center; }
+.cam-bottom {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between;
+  padding: 2rem 1.5rem max(1.25rem, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, #000a);
+}
+.cam-icon {
+  width: 46px; height: 46px; border-radius: 50%; border: 0; background: #0009; color: #fff; font-size: 1.2rem;
+  display: grid; place-items: center; cursor: pointer; flex: none;
+}
+.cam-spacer { width: 46px; flex: none; }
+.shutter {
+  width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff; background: #fff;
+  box-shadow: inset 0 0 0 4px #000; cursor: pointer; padding: 0; transition: transform .1s;
+}
+.shutter:active { transform: scale(.92); }
+.shutter:disabled { opacity: .4; cursor: not-allowed; }
+
+/* --- Retoque de manchas --- */
+.result-wrap { position: relative; display: inline-block; line-height: 0; }
+.result-wrap.retouching img { cursor: crosshair; }
+.spot-mark {
+  position: absolute; transform: translate(-50%, -50%); border: 2px solid var(--accent); border-radius: 50%;
+  pointer-events: none; box-shadow: 0 0 0 1px #000a;
+}

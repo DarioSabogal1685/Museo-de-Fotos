@@ -3,12 +3,14 @@ import { clearAdminToken, fetchRooms, getAdminToken, uploadPhoto, type Room } fr
 import Cropper, { fitCrop, type Crop } from './Cropper'
 import {
   analyzeLight,
+  autoAdjust,
   cropCanvas,
   DEFAULT_ADJUST,
   developNegative,
   rotateCanvas,
   type Adjust,
   type LightState,
+  type Spot,
 } from './develop'
 
 interface Props {
@@ -41,8 +43,14 @@ const RATIOS: { key: string; label: string; value: number | null }[] = [
 const SLIDERS: { key: keyof Adjust; label: string; min: number; max: number; step: number }[] = [
   { key: 'exposure', label: 'Brillo', min: -1, max: 1, step: 0.05 },
   { key: 'contrast', label: 'Contraste', min: 0, max: 2, step: 0.05 },
+  { key: 'shadows', label: 'Sombras', min: -1, max: 1, step: 0.05 },
+  { key: 'highlights', label: 'Luces', min: -1, max: 1, step: 0.05 },
   { key: 'warmth', label: 'Frío ↔ Cálido', min: -1, max: 1, step: 0.05 },
   { key: 'saturation', label: 'Color', min: 0, max: 2, step: 0.05 },
+  { key: 'noiseLuma', label: 'Reducir ruido', min: 0, max: 1, step: 0.05 },
+  { key: 'noiseColor', label: 'Ruido de color', min: 0, max: 1, step: 0.05 },
+  { key: 'sharpness', label: 'Nitidez', min: 0, max: 1, step: 0.05 },
+  { key: 'dust', label: 'Quitar polvo y rayones', min: 0, max: 1, step: 0.05 },
 ]
 
 interface ImageCaptureLike {
@@ -73,7 +81,6 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const [stage, setStage] = useState<Stage>('camera')
-  const [aspect, setAspect] = useState(16 / 9)
   const [light, setLight] = useState<LightState>('dark')
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
@@ -86,6 +93,9 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
 
   const [adjust, setAdjust] = useState<Adjust>(DEFAULT_ADJUST)
   const [positiveUrl, setPositiveUrl] = useState<string | null>(null)
+  const [spots, setSpots] = useState<Spot[]>([])
+  const [retouch, setRetouch] = useState(false)
+  const [brush, setBrush] = useState(0.012)
 
   const [rooms, setRooms] = useState<Room[]>([])
   const [roomId, setRoomId] = useState(defaultRoomId ?? '')
@@ -190,21 +200,45 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     }
   }, [captured, rotatedPreview, crop])
 
+  // Los retoques manuales dependen del encuadre: si cambia, se descartan.
+  useEffect(() => {
+    setSpots([])
+    setRetouch(false)
+  }, [crop, angle])
+
   // --- Revelado (vista previa) ---
   useEffect(() => {
     if (stage !== 'adjust' || !rotatedPreview) return
     const id = window.setTimeout(() => {
       const cropped = cropCanvas(rotatedPreview, crop)
-      setPositiveUrl(developNegative(cropped, adjust).toDataURL('image/jpeg', 0.9))
+      setPositiveUrl(developNegative(cropped, adjust, spots).toDataURL('image/jpeg', 0.9))
     }, 40)
     return () => window.clearTimeout(id)
-  }, [stage, rotatedPreview, crop, adjust])
+  }, [stage, rotatedPreview, crop, adjust, spots])
 
   const finalCanvas = () => {
     if (!captured) throw new Error('No hay foto')
     const rotated = rotateCanvas(captured.full, angle)
-    return developNegative(cropCanvas(rotated, crop), adjust)
+    return developNegative(cropCanvas(rotated, crop), adjust, spots)
   }
+
+  const runAutoAdjust = () => {
+    if (rotatedPreview) setAdjust(autoAdjust(cropCanvas(rotatedPreview, crop)))
+  }
+
+  const addSpot = (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!retouch) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    setSpots((list) => [
+      ...list,
+      { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height, r: brush },
+    ])
+  }
+
+  // Tamano del recorte revelado, para dibujar los marcadores de retoque a su escala.
+  const outW = rotatedPreview ? crop.w * rotatedPreview.width : 1
+  const outH = rotatedPreview ? crop.h * rotatedPreview.height : 1
+  const outSide = Math.max(outW, outH)
 
   // --- Captura ---
   const process = (source: CanvasImageSource, sw: number, sh: number) => {
@@ -319,49 +353,41 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   }
 
   return (
-    <div className="modal" role="dialog" aria-modal="true" aria-label="Revelar negativo">
-      <div className="modal-head">
-        <h2>Revelar negativo</h2>
-        <button className="btn" onClick={onClose}>Cerrar</button>
-      </div>
+    <div className={stage === 'camera' ? 'cam-full' : 'modal'} role="dialog" aria-modal="true" aria-label="Revelar negativo">
+      {stage !== 'camera' && (
+        <div className="modal-head">
+          <h2>Revelar negativo</h2>
+          <button className="btn" onClick={onClose}>Cerrar</button>
+        </div>
+      )}
 
       {stage === 'camera' && (
-        <div className="modal-body">
-          <div className="camera" style={{ aspectRatio: aspect }}>
-            <video
-              ref={videoRef}
-              playsInline
-              muted
-              onLoadedMetadata={(e) => {
-                const v = e.currentTarget
-                if (v.videoWidth) setAspect(v.videoWidth / v.videoHeight)
-              }}
-            />
-            {processing && <div className="camera-overlay">Procesando…</div>}
+        <>
+          <video ref={videoRef} className="cam-video" playsInline muted />
+
+          <div className="cam-top">
+            <button className="cam-icon" aria-label="Cerrar" onClick={onClose}>✕</button>
+            <p className={cameraError ? 'cam-hint light-dark' : `cam-hint light-${light}`}>
+              {cameraError ?? LIGHT_MESSAGES[light]}
+            </p>
           </div>
 
-          {cameraError ? (
-            <p className="message error">{cameraError}</p>
-          ) : (
-            <p className={`light-hint light-${light}`}>{LIGHT_MESSAGES[light]}</p>
-          )}
-
-          <ol className="tips">
-            <li>Coloca el negativo sobre una pantalla blanca o una caja de luz.</li>
-            <li>Acércate lo más posible: cuanto más grande se vea el negativo, más nítida queda la foto.</li>
-            <li>Apaga las otras luces del cuarto para evitar reflejos. Luego podrás recortar y girar.</li>
-          </ol>
-
-          <div className="modal-actions">
-            <label className="btn">
-              Elegir archivo
+          <div className="cam-bottom">
+            <label className="cam-icon cam-file" aria-label="Elegir archivo" title="Elegir archivo">
+              🖼
               <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
             </label>
-            <button className="btn primary" onClick={capture} disabled={Boolean(cameraError) || processing}>
-              Capturar
-            </button>
+            <button
+              className="shutter"
+              aria-label="Capturar foto"
+              onClick={capture}
+              disabled={Boolean(cameraError) || processing}
+            />
+            <span className="cam-spacer" />
           </div>
-        </div>
+
+          {processing && <div className="camera-overlay">Procesando…</div>}
+        </>
       )}
 
       {stage === 'crop' && rotatedUrl && (
@@ -426,10 +452,52 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
           <p className="step-title">2. Ajusta la foto revelada</p>
 
           <div className="result-stage">
-            {positiveUrl ? <img src={positiveUrl} alt="Foto revelada a color" /> : <div className="compare-wait">Revelando…</div>}
+            {positiveUrl ? (
+              <div className={`result-wrap${retouch ? ' retouching' : ''}`}>
+                <img src={positiveUrl} alt="Foto revelada a color" onClick={addSpot} draggable={false} />
+                {retouch &&
+                  spots.map((s, i) => (
+                    <span
+                      key={i}
+                      className="spot-mark"
+                      style={{
+                        left: `${s.x * 100}%`,
+                        top: `${s.y * 100}%`,
+                        width: `${((2 * s.r * outSide) / outW) * 100}%`,
+                        height: `${((2 * s.r * outSide) / outH) * 100}%`,
+                      }}
+                    />
+                  ))}
+              </div>
+            ) : (
+              <div className="compare-wait">Revelando…</div>
+            )}
           </div>
 
           <div className="adjust-box">
+            <div className="chips">
+              <button className="btn primary" onClick={runAutoAdjust}>✨ Automejora</button>
+              <button className={`btn${retouch ? ' primary' : ''}`} onClick={() => setRetouch((v) => !v)}>
+                {retouch ? 'Terminar retoque' : 'Retocar manchas'}
+              </button>
+            </div>
+
+            {retouch && (
+              <>
+                <p className="hint">Toca cada mancha o rayón de la foto para borrarlo.</p>
+                <label className="slider">
+                  <span>Tamaño del pincel</span>
+                  <input type="range" min={0.004} max={0.04} step={0.002} value={brush} onChange={(e) => setBrush(Number(e.target.value))} />
+                </label>
+                <div className="chips">
+                  <button className="btn" disabled={spots.length === 0} onClick={() => setSpots((l) => l.slice(0, -1))}>Deshacer</button>
+                  <button className="btn" disabled={spots.length === 0} onClick={() => setSpots([])}>
+                    Quitar todos los retoques ({spots.length})
+                  </button>
+                </div>
+              </>
+            )}
+
             {SLIDERS.map((s) => (
               <label key={s.key} className="slider">
                 <span>{s.label}</span>
