@@ -11,10 +11,32 @@ export interface Photo {
   height?: number
 }
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8787'
+// Sin VITE_API_URL la web funciona en modo demo, con cuartos y fotos de ejemplo.
+const API: string | undefined = import.meta.env.VITE_API_URL || undefined
+export const DEMO = !API
 
-export const thumbUrl = (id: string, w = 400) => `${API}/api/photos/${id}/thumb?w=${w}`
-export const photoUrl = (id: string) => `${API}/api/photos/${id}`
+const DEMO_ROOMS: Room[] = ['Sala', 'Comedor', 'Cocina', 'Biblioteca', 'Jardín', 'Estudio', 'Terraza'].map(
+  (name, i) => ({ id: `demo${i}`, name }),
+)
+
+/** Imagen de ejemplo generada a partir del id (degradado + etiqueta). */
+function demoImage(id: string, w: number, h: number): string {
+  let hash = 0
+  for (const c of id) hash = (hash * 31 + c.charCodeAt(0)) % 360
+  const label = id.replace(/^demo(\d+)-(\d+)$/, (_, r, p) => `${DEMO_ROOMS[Number(r)]?.name ?? ''} ${Number(p) + 1}`)
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="hsl(${hash},60%,45%)"/><stop offset="1" stop-color="hsl(${(hash + 60) % 360},65%,25%)"/>` +
+    `</linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/>` +
+    `<text x="50%" y="50%" fill="#fff" fill-opacity=".85" font-family="sans-serif" font-size="${Math.round(w / 12)}" ` +
+    `text-anchor="middle" dominant-baseline="middle">${label}</text></svg>`
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+}
+
+export const thumbUrl = (id: string, w = 400) =>
+  DEMO ? demoImage(id, w, w) : `${API}/api/photos/${id}/thumb?w=${w}`
+export const photoUrl = (id: string) => (DEMO ? demoImage(id, 1600, 1066) : `${API}/api/photos/${id}`)
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, init)
@@ -27,18 +49,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
 
-export const fetchRooms = () => request<Room[]>('/api/rooms')
+const demoOnly = () => Promise.reject(new Error('Modo demo: conecta Google Drive para crear cuartos y subir fotos'))
 
-export const fetchPhotos = (roomId: string) => request<Photo[]>(`/api/rooms/${roomId}/photos`)
+export const fetchRooms = () => (DEMO ? Promise.resolve(DEMO_ROOMS) : request<Room[]>('/api/rooms'))
+
+export const fetchPhotos = (roomId: string) =>
+  DEMO
+    ? Promise.resolve(
+        Array.from({ length: 12 }, (_, i) => ({
+          id: `${roomId}-${i}`,
+          name: `Foto ${i + 1}`,
+          createdTime: new Date().toISOString(),
+        })),
+      )
+    : request<Photo[]>(`/api/rooms/${roomId}/photos`)
 
 export const createRoom = (name: string, token: string) =>
-  request<Room>('/api/rooms', {
-    method: 'POST',
-    headers: { ...auth(token), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
+  DEMO
+    ? demoOnly()
+    : request<Room>('/api/rooms', {
+        method: 'POST',
+        headers: { ...auth(token), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
 
 export function uploadPhoto(roomId: string, file: File, token: string) {
+  if (DEMO) return demoOnly()
   const body = new FormData()
   body.append('file', file)
   return request<Photo>(`/api/rooms/${roomId}/photos`, {
