@@ -6,6 +6,7 @@ import {
   fetchPhotos,
   getAdminToken,
   photoUrl,
+  sortLeftToRight,
   thumbUrl,
   uploadPhoto,
   type Photo,
@@ -20,6 +21,9 @@ interface Props {
 const LONG_PRESS_MS = 500
 const MOVE_TOLERANCE = 10
 
+const hasInfo = (photo: Photo) =>
+  Boolean(photo.tags && (photo.tags.place || photo.tags.people.length > 0 || photo.tags.groups?.length))
+
 export default function RoomView({ room, onBack }: Props) {
   const [photos, setPhotos] = useState<Photo[]>([])
   const [selected, setSelected] = useState<number | null>(null)
@@ -28,6 +32,12 @@ export default function RoomView({ room, onBack }: Props) {
   const [uploading, setUploading] = useState(false)
   const [menuId, setMenuId] = useState<string | null>(null)
   const [editing, setEditing] = useState<Photo | null>(null)
+  const [showInfo, setShowInfo] = useState(false)
+
+  // La informacion siempre arranca oculta al abrir otra foto.
+  useEffect(() => {
+    setShowInfo(false)
+  }, [selected])
 
   // Estado de la pulsacion larga.
   const pressTimer = useRef<number | null>(null)
@@ -220,31 +230,45 @@ export default function RoomView({ room, onBack }: Props) {
 
       {current && (
         <div className="lightbox" onClick={() => setSelected(null)}>
-          <div className="lightbox-photo">
-            <img src={photoUrl(current.id, current.modifiedTime)} alt={current.name} />
-            {current.tags?.people.map((p, i) => (
-              <span key={i} className="person-dot" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}>
-                <i>{p.name}</i>
-              </span>
-            ))}
-          </div>
-          <p>
-            {current.name} · {(selected ?? 0) + 1} / {photos.length}
-            {current.tags?.place && ` · 📍 ${current.tags.place}`}
-          </p>
+          <img src={photoUrl(current.id, current.modifiedTime)} alt={current.name} />
+          <p>{current.name} · {(selected ?? 0) + 1} / {photos.length}</p>
+
+          {hasInfo(current) && (
+            <div className="info-area" onClick={(e) => e.stopPropagation()}>
+              <button className="info-toggle" onClick={() => setShowInfo((v) => !v)}>
+                {showInfo ? 'Ocultar información' : 'Revelar información'}
+              </button>
+              {showInfo && (
+                <div className="info-panel">
+                  {current.tags?.place && <p>📍 {current.tags.place}</p>}
+                  {current.tags?.groups && current.tags.groups.length > 0 && (
+                    <p>Grupos: {current.tags.groups.join(', ')}</p>
+                  )}
+                  {current.tags && current.tags.people.length > 0 && (
+                    <>
+                      <p className="info-label">De izquierda a derecha:</p>
+                      <ol className="info-people">
+                        {sortLeftToRight(current.tags.people).map((p, i) => (
+                          <li key={i}>{p.name}</li>
+                        ))}
+                      </ol>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       {editing && (
         <PhotoEditor
           photo={editing}
-          roomId={room.id}
           onClose={() => setEditing(null)}
           onUpdated={(updated) => {
             setPhotos((list) => list.map((p) => (p.id === updated.id ? updated : p)))
             setEditing(updated)
           }}
-          onCreated={(created) => setPhotos((list) => [created, ...list])}
         />
       )}
     </>

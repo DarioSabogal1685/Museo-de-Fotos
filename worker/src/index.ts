@@ -3,9 +3,12 @@ import {
 	getPhotoContent,
 	getPhotoThumbnail,
 	listPhotos,
+	getGroups,
 	listRooms,
 	listTagSuggestions,
 	replacePhoto,
+	saveGroups,
+	sanitizeGroups,
 	sanitizeTags,
 	trashPhoto,
 	updatePhotoMeta,
@@ -73,6 +76,18 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 
 	if (pathname === "/api/rooms" && request.method === "GET") {
 		return json(env, await listRooms(env), 200, { "Cache-Control": "public, max-age=60" });
+	}
+
+	if (pathname === "/api/groups" && request.method === "GET") {
+		return json(env, await getGroups(env), 200, { "Cache-Control": "no-cache" });
+	}
+
+	if (pathname === "/api/groups" && request.method === "PUT") {
+		if (!(await isAdmin(request, env))) return json(env, { error: "No autorizado" }, 401);
+		const body = (await request.json().catch(() => null)) as { groups?: unknown } | null;
+		const groups = sanitizeGroups(body?.groups);
+		if (!groups) return json(env, { error: "Grupos no validos" }, 400);
+		return json(env, await saveGroups(env, groups));
 	}
 
 	if (pathname === "/api/tags" && request.method === "GET") {

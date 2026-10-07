@@ -5,14 +5,22 @@ export interface Room {
 
 export interface PersonTag {
   name: string
-  /** Posicion del punto sobre la foto, de 0 a 1. */
-  x: number
-  y: number
+  /** Posicion del punto sobre la foto, de 0 a 1. Sin punto, la persona va al final de la lista. */
+  x?: number
+  y?: number
 }
 
 export interface PhotoTags {
   place?: string
+  /** Siempre ordenadas de izquierda a derecha. */
   people: PersonTag[]
+  /** Grupos aplicados a esta foto. */
+  groups?: string[]
+}
+
+export interface Group {
+  name: string
+  members: string[]
 }
 
 export interface TagSuggestions {
@@ -120,6 +128,26 @@ export function updatePhotoMeta(id: string, changes: { name?: string; tags?: Pho
     headers: { ...auth(token), 'Content-Type': 'application/json' },
     body: JSON.stringify(changes),
   })
+}
+
+export const fetchGroups = (): Promise<Group[]> =>
+  DEMO
+    ? Promise.resolve([{ name: 'Familia', members: ['Ana', 'Luis', 'María'] }])
+    : request<Group[]>('/api/groups')
+
+/** Guarda la lista completa de grupos. */
+export function saveGroups(groups: Group[], token: string) {
+  if (DEMO) return demoOnly()
+  return request<Group[]>('/api/groups', {
+    method: 'PUT',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ groups }),
+  })
+}
+
+/** Personas ordenadas de izquierda a derecha; las que no tienen punto van al final. */
+export function sortLeftToRight<T extends { x?: number }>(people: T[]): T[] {
+  return [...people].sort((a, b) => (a.x ?? Infinity) - (b.x ?? Infinity))
 }
 
 /** Nombres y lugares ya guardados, para el texto predictivo. */

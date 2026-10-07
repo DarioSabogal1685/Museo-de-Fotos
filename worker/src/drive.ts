@@ -16,14 +16,22 @@ export interface Photo {
 
 export interface PersonTag {
 	name: string;
-	/** Posicion del punto sobre la foto, de 0 a 1. */
-	x: number;
-	y: number;
+	/** Posicion del punto sobre la foto, de 0 a 1. Sin punto, la persona va al final de la lista. */
+	x?: number;
+	y?: number;
 }
 
 export interface PhotoTags {
 	place?: string;
+	/** Siempre ordenadas de izquierda a derecha segun su punto. */
 	people: PersonTag[];
+	/** Nombres de los grupos aplicados a esta foto. */
+	groups?: string[];
+}
+
+export interface Group {
+	name: string;
+	members: string[];
 }
 
 const TAGS_PREFIX = "museo:";
@@ -32,20 +40,52 @@ const MAX_PEOPLE = 60;
 /** Valida y limpia etiquetas recibidas (o leidas de Drive); devuelve null si no tienen forma valida. */
 export function sanitizeTags(input: unknown): PhotoTags | null {
 	if (typeof input !== "object" || input === null) return null;
-	const raw = input as { place?: unknown; people?: unknown };
+	const raw = input as { place?: unknown; people?: unknown; groups?: unknown };
 	const people: PersonTag[] = [];
 	if (Array.isArray(raw.people)) {
 		for (const p of raw.people.slice(0, MAX_PEOPLE)) {
 			const item = p as { name?: unknown; x?: unknown; y?: unknown };
 			const name = typeof item?.name === "string" ? item.name.trim().slice(0, 60) : "";
-			const x = Number(item?.x);
-			const y = Number(item?.y);
-			if (!name || !Number.isFinite(x) || !Number.isFinite(y)) continue;
-			people.push({ name, x: Math.min(Math.max(x, 0), 1), y: Math.min(Math.max(y, 0), 1) });
+			if (!name) continue;
+			const x = item.x === undefined || item.x === null ? NaN : Number(item.x);
+			const y = item.y === undefined || item.y === null ? NaN : Number(item.y);
+			if (Number.isFinite(x) && Number.isFinite(y)) {
+				people.push({ name, x: Math.min(Math.max(x, 0), 1), y: Math.min(Math.max(y, 0), 1) });
+			} else {
+				people.push({ name });
+			}
 		}
 	}
+	// Orden de izquierda a derecha; las personas sin punto quedan al final (el orden es estable).
+	people.sort((a, b) => (a.x ?? Infinity) - (b.x ?? Infinity));
+
+	const groups = Array.isArray(raw.groups)
+		? [...new Set(raw.groups.filter((g): g is string => typeof g === "string").map((g) => g.trim().slice(0, 60)).filter(Boolean))].slice(0, 20)
+		: [];
 	const place = typeof raw.place === "string" ? raw.place.trim().slice(0, 100) : "";
-	return place ? { place, people } : { people };
+
+	const tags: PhotoTags = { people };
+	if (place) tags.place = place;
+	if (groups.length > 0) tags.groups = groups;
+	return tags;
+}
+
+/** Valida la lista de grupos recibida. */
+export function sanitizeGroups(input: unknown): Group[] | null {
+	if (!Array.isArray(input)) return null;
+	const seen = new Set<string>();
+	const groups: Group[] = [];
+	for (const g of input.slice(0, 60)) {
+		const item = g as { name?: unknown; members?: unknown };
+		const name = typeof item?.name === "string" ? item.name.trim().slice(0, 60) : "";
+		if (!name || seen.has(name.toLowerCase())) continue;
+		seen.add(name.toLowerCase());
+		const members = Array.isArray(item.members)
+			? [...new Set(item.members.filter((m): m is string => typeof m === "string").map((m) => m.trim().slice(0, 60)).filter(Boolean))].slice(0, MAX_PEOPLE)
+			: [];
+		groups.push({ name, members });
+	}
+	return groups;
 }
 
 function parseTags(description?: string): PhotoTags | undefined {
@@ -339,4 +379,57 @@ export async function trashPhoto(env: Env, id: string): Promise<boolean> {
 		body: JSON.stringify({ trashed: true }),
 	});
 	return res.ok;
+}
+
+// --- Grupos de personas: un archivo JSON en la carpeta principal del museo ---
+const GROUPS_FILE = "museo-grupos.json";
+let cachedGroups: { groups: Group[]; expiresAt: number } | null = null;
+
+async function findGroupsFileId(env: Env): Promise<string | null> {
+	const params = new URLSearchParams({
+		q: `name = '${GROUPS_FILE}' and '${env.DRIVE_FOLDER_ID}' in parents and trashed = false`,
+		fields: "files(id)",
+		pageSize: "1",
+	});
+	const res = await driveFetch(env, `${DRIVE_API}/files?${params}`);
+	if (!res.ok) throw new Error(`Drive buscar grupos fallo (${res.status})`);
+	const data = (await res.json()) as { files: { id: string }[] };
+	return data.files[0]?.id ?? null;
+}
+
+export async function getGroups(env: Env): Promise<Group[]> {
+	if (cachedGroups && cachedGroups.expiresAt > Date.now()) return cachedGroups.groups;
+	const id = await findGroupsFileId(env);
+	let groups: Group[] = [];
+	if (id) {
+		const res = await driveFetch(env, `${DRIVE_API}/files/${encodeURIComponent(id)}?alt=media`);
+		if (res.ok) groups = sanitizeGroups(await res.json().catch(() => [])) ?? [];
+	}
+	cachedGroups = { groups, expiresAt: Date.now() + 30_000 };
+	return groups;
+}
+
+export async function saveGroups(env: Env, groups: Group[]): Promise<Group[]> {
+	const file = new File([JSON.stringify(groups)], GROUPS_FILE, { type: "application/json" });
+	const id = await findGroupsFileId(env);
+	const params = new URLSearchParams({ uploadType: "multipart", fields: "id" });
+	let res: Response;
+	if (id) {
+		const { body, contentType } = multipartBody({}, file);
+		res = await driveFetch(env, `${DRIVE_UPLOAD}/${encodeURIComponent(id)}?${params}`, {
+			method: "PATCH",
+			headers: { "Content-Type": contentType },
+			body,
+		});
+	} else {
+		const { body, contentType } = multipartBody({ name: GROUPS_FILE, parents: [env.DRIVE_FOLDER_ID] }, file);
+		res = await driveFetch(env, `${DRIVE_UPLOAD}?${params}`, {
+			method: "POST",
+			headers: { "Content-Type": contentType },
+			body,
+		});
+	}
+	if (!res.ok) throw new Error(`Drive guardar grupos fallo (${res.status})`);
+	cachedGroups = { groups, expiresAt: Date.now() + 30_000 };
+	return groups;
 }
