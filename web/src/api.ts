@@ -84,6 +84,15 @@ export function uploadPhoto(roomId: string, file: File, token: string) {
   })
 }
 
+/** Olvida la clave guardada (por ejemplo, si el servidor la rechazo). */
+export function clearAdminToken() {
+  try {
+    sessionStorage.removeItem('adminToken')
+  } catch {
+    /* sin almacenamiento disponible */
+  }
+}
+
 /** La clave de administrador se guarda solo mientras la pestaña este abierta. */
 export function getAdminToken(): string | null {
   try {

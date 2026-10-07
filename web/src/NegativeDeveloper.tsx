@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { analyzeLight, developNegative, guideRect, type LightState } from './develop'
+import { clearAdminToken, fetchRooms, getAdminToken, uploadPhoto, type Room } from './api'
+import {
+  analyzeLight,
+  DEFAULT_ADJUST,
+  developNegative,
+  guideRect,
+  type Adjust,
+  type LightState,
+} from './develop'
 
 interface Props {
+  defaultRoomId?: string
   onClose: () => void
 }
 
@@ -12,17 +21,60 @@ const LIGHT_MESSAGES: Record<LightState, string> = {
   good: 'Luz correcta. Mantén quieto el celular y pulsa «Capturar».',
 }
 
-const MAX_SIDE = 2000
+const MAX_SIDE = 2400
+const PREVIEW_SIDE = 900
 
-export default function NegativeDeveloper({ onClose }: Props) {
+interface Captured {
+  full: HTMLCanvasElement
+  preview: HTMLCanvasElement
+  negativeUrl: string
+}
+
+const SLIDERS: { key: keyof Adjust; label: string; min: number; max: number; step: number }[] = [
+  { key: 'exposure', label: 'Brillo', min: -1, max: 1, step: 0.05 },
+  { key: 'contrast', label: 'Contraste', min: 0, max: 2, step: 0.05 },
+  { key: 'warmth', label: 'Frío ↔ Cálido', min: -1, max: 1, step: 0.05 },
+  { key: 'saturation', label: 'Color', min: 0, max: 2, step: 0.05 },
+]
+
+function scaled(source: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
+  const scale = Math.min(1, maxSide / Math.max(source.width, source.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(source.width * scale)
+  canvas.height = Math.round(source.height * scale)
+  canvas.getContext('2d')?.drawImage(source, 0, 0, canvas.width, canvas.height)
+  return canvas
+}
+
+const toBlob = (canvas: HTMLCanvasElement) =>
+  new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo crear la imagen'))), 'image/jpeg', 0.93),
+  )
+
+export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const [aspect, setAspect] = useState(4 / 3)
   const [guide, setGuide] = useState({ left: 8, top: 8, width: 84, height: 84 })
   const [light, setLight] = useState<LightState>('dark')
   const [cameraError, setCameraError] = useState<string | null>(null)
-  const [result, setResult] = useState<{ negative: string; positive: string } | null>(null)
+  const [captured, setCaptured] = useState<Captured | null>(null)
+  const [adjust, setAdjust] = useState<Adjust>(DEFAULT_ADJUST)
+  const [positiveUrl, setPositiveUrl] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
+  const [rooms, setRooms] = useState<Room[]>([])
+  const [roomId, setRoomId] = useState(defaultRoomId ?? '')
+  const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; text: string } | null>(null)
+
+  useEffect(() => {
+    fetchRooms()
+      .then((list) => {
+        setRooms(list)
+        setRoomId((current) => current || list[0]?.id || '')
+      })
+      .catch(() => setRooms([]))
+  }, [])
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -67,13 +119,25 @@ export default function NegativeDeveloper({ onClose }: Props) {
 
   // Revisa la luz del recuadro mientras la camara esta activa.
   useEffect(() => {
-    if (result || cameraError) return
+    if (captured || cameraError) return
     const id = window.setInterval(() => {
       const video = videoRef.current
       if (video && video.videoWidth) setLight(analyzeLight(video))
     }, 500)
     return () => window.clearInterval(id)
-  }, [result, cameraError])
+  }, [captured, cameraError])
+
+  // Re-revela la vista previa cada vez que cambia un ajuste.
+  useEffect(() => {
+    if (!captured) {
+      setPositiveUrl(null)
+      return
+    }
+    const id = window.setTimeout(() => {
+      setPositiveUrl(developNegative(captured.preview, adjust).toDataURL('image/jpeg', 0.9))
+    }, 40)
+    return () => window.clearTimeout(id)
+  }, [captured, adjust])
 
   const onMetadata = () => {
     const video = videoRef.current
@@ -95,12 +159,13 @@ export default function NegativeDeveloper({ onClose }: Props) {
     window.setTimeout(() => {
       try {
         const scale = Math.min(1, MAX_SIDE / Math.max(sw, sh))
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(sw * scale)
-        canvas.height = Math.round(sh * scale)
-        canvas.getContext('2d')?.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-        const positive = developNegative(canvas)
-        setResult({ negative: canvas.toDataURL('image/jpeg', 0.9), positive: positive.toDataURL('image/jpeg', 0.92) })
+        const full = document.createElement('canvas')
+        full.width = Math.round(sw * scale)
+        full.height = Math.round(sh * scale)
+        full.getContext('2d')?.drawImage(source, sx, sy, sw, sh, 0, 0, full.width, full.height)
+        const preview = scaled(full, PREVIEW_SIDE)
+        setAdjust(DEFAULT_ADJUST)
+        setCaptured({ full, preview, negativeUrl: preview.toDataURL('image/jpeg', 0.85) })
         stopCamera()
       } catch (e) {
         setCameraError((e as Error).message)
@@ -124,16 +189,41 @@ export default function NegativeDeveloper({ onClose }: Props) {
   }
 
   const retake = () => {
-    setResult(null)
+    setCaptured(null)
+    setSaveStatus(null)
     startCamera()
   }
 
-  const download = () => {
-    if (!result) return
+  const download = async () => {
+    if (!captured) return
+    const blob = await toBlob(developNegative(captured.full, adjust))
+    const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = result.positive
+    a.href = url
     a.download = `foto-revelada-${Date.now()}.jpg`
     a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const save = async () => {
+    if (!captured || !roomId) return
+    const token = getAdminToken()
+    if (!token) return
+    setSaving(true)
+    setSaveStatus(null)
+    try {
+      const blob = await toBlob(developNegative(captured.full, adjust))
+      const file = new File([blob], `negativo-revelado-${Date.now()}.jpg`, { type: 'image/jpeg' })
+      await uploadPhoto(roomId, file, token)
+      const roomName = rooms.find((r) => r.id === roomId)?.name ?? 'el cuarto'
+      setSaveStatus({ ok: true, text: `Foto guardada en «${roomName}».` })
+    } catch (e) {
+      const message = (e as Error).message
+      if (message === 'No autorizado') clearAdminToken()
+      setSaveStatus({ ok: false, text: message })
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -143,7 +233,7 @@ export default function NegativeDeveloper({ onClose }: Props) {
         <button className="btn" onClick={onClose}>Cerrar</button>
       </div>
 
-      {!result && (
+      {!captured && (
         <div className="modal-body">
           <div className="camera" style={{ aspectRatio: aspect }}>
             <video ref={videoRef} playsInline muted onLoadedMetadata={onMetadata} />
@@ -188,21 +278,62 @@ export default function NegativeDeveloper({ onClose }: Props) {
         </div>
       )}
 
-      {result && (
+      {captured && (
         <div className="modal-body">
           <div className="compare">
             <figure>
-              <img src={result.negative} alt="Negativo capturado" />
+              <img src={captured.negativeUrl} alt="Negativo capturado" />
               <figcaption>Negativo</figcaption>
             </figure>
             <figure>
-              <img src={result.positive} alt="Foto revelada a color" />
+              {positiveUrl ? <img src={positiveUrl} alt="Foto revelada a color" /> : <div className="compare-wait">Revelando…</div>}
               <figcaption>Revelada</figcaption>
             </figure>
           </div>
+
+          <div className="adjust-box">
+            {SLIDERS.map((s) => (
+              <label key={s.key} className="slider">
+                <span>{s.label}</span>
+                <input
+                  type="range"
+                  min={s.min}
+                  max={s.max}
+                  step={s.step}
+                  value={adjust[s.key]}
+                  onChange={(e) => setAdjust((a) => ({ ...a, [s.key]: Number(e.target.value) }))}
+                />
+              </label>
+            ))}
+            <button className="btn" onClick={() => setAdjust(DEFAULT_ADJUST)}>Restablecer ajustes</button>
+          </div>
+
+          <div className="save-box">
+            <label htmlFor="room-select">¿En qué cuarto la quieres guardar?</label>
+            <select
+              id="room-select"
+              value={roomId}
+              onChange={(e) => {
+                setRoomId(e.target.value)
+                setSaveStatus(null)
+              }}
+              disabled={saving || rooms.length === 0}
+            >
+              {rooms.length === 0 && <option value="">No hay cuartos disponibles</option>}
+              {rooms.map((r) => (
+                <option key={r.id} value={r.id}>{r.name}</option>
+              ))}
+            </select>
+            <button className="btn primary" onClick={save} disabled={saving || !roomId || saveStatus?.ok}>
+              {saving ? 'Guardando…' : 'Guardar en Drive'}
+            </button>
+            {saveStatus && (
+              <p className={saveStatus.ok ? 'light-hint light-good' : 'message error'}>{saveStatus.text}</p>
+            )}
+          </div>
           <div className="modal-actions">
             <button className="btn" onClick={retake}>Tomar otra</button>
-            <button className="btn primary" onClick={download}>Descargar foto</button>
+            <button className="btn" onClick={download}>Descargar foto</button>
           </div>
         </div>
       )}

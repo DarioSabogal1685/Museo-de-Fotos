@@ -76,7 +76,7 @@ export default function RoomView({ room, onBack }: Props) {
               }}
             />
           </label>
-          <Menu />
+          <Menu currentRoomId={room.id} />
         </div>
       </div>
 

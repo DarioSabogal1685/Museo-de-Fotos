@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import NegativeDeveloper from './NegativeDeveloper'
 
-export default function Menu() {
+interface Props {
+  /** Cuarto donde se esta (se preselecciona al guardar una foto revelada). */
+  currentRoomId?: string
+}
+
+export default function Menu({ currentRoomId }: Props) {
   const [open, setOpen] = useState(false)
   const [developing, setDeveloping] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -52,7 +57,7 @@ export default function Menu() {
         </div>
       )}
 
-      {developing && <NegativeDeveloper onClose={() => setDeveloping(false)} />}
+      {developing && <NegativeDeveloper defaultRoomId={currentRoomId} onClose={() => setDeveloping(false)} />}
     </div>
   )
 }
