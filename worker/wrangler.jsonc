@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "museo-de-fotos-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "logs": { "enabled": true, "head_sampling_rate": 1 }
+  },
+  "vars": {
+    // Origen de la web que puede llamar a la API (CORS). Cambialo al desplegar.
+    "ALLOWED_ORIGIN": "http://localhost:5173"
+  }
+  // Secretos (wrangler secret put): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  // GOOGLE_REFRESH_TOKEN, DRIVE_FOLDER_ID, ADMIN_TOKEN
+}
