@@ -154,6 +154,12 @@ export default function DownloadButton() {
                     {result.alreadyOk > 0 && ` Otras ${result.alreadyOk} ya estaban y siguen correctas.`}
                   </p>
                 )}
+                {result.adopted > 0 && (
+                  <p className="hint">
+                    {result.adopted} foto{result.adopted === 1 ? '' : 's'} ya estaba{result.adopted === 1 ? '' : 'n'} en la
+                    carpeta de antes: se reconocieron por su nombre y tamaño y no se descargaron otra vez.
+                  </p>
+                )}
                 {result.mode === 'browser' && (
                   <p className="hint">
                     Tu navegador no permite elegir carpeta, así que las fotos se guardaron en tu carpeta de Descargas. Llegaron

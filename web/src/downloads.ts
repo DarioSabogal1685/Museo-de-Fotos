@@ -132,6 +132,33 @@ export interface Plan {
   pending: RemotePhoto[]
   /** Fotos ya descargadas que siguen en la carpeta con el tamano correcto. */
   upToDate: number
+  /** De las anteriores, las que no estaban en la memoria de la app pero se encontraron en la carpeta. */
+  adopted: number
+}
+
+/**
+ * Si no hay registro de la foto (por ejemplo, se borro la memoria del navegador) pero la carpeta ya tiene
+ * un archivo con su nombre y exactamente su tamano, se da por descargada para no duplicarla.
+ */
+async function adoptExisting(dir: FileSystemDirectoryHandle, rp: RemotePhoto): Promise<boolean> {
+  const { photo, room } = rp
+  if (!photo.size) return false
+  const roomName = sanitize(room.name)
+  const base = sanitize(photo.name)
+  for (const fileName of [base, withSuffix(base, photo.id)]) {
+    if ((await sizeOnDisk(dir, [roomName, fileName])) === photo.size) {
+      await putRecord({
+        id: photo.id,
+        path: [roomName, fileName],
+        md5: photo.md5,
+        size: photo.size,
+        at: Date.now(),
+        verifiedOnDisk: true,
+      })
+      return true
+    }
+  }
+  return false
 }
 
 /** Decide que fotos faltan. Con carpeta accesible, comprueba ademas que los archivos sigan en el disco. */
@@ -139,9 +166,15 @@ export async function planDownloads(all: RemotePhoto[], dir: FileSystemDirectory
   const records = await getRecords()
   const pending: RemotePhoto[] = []
   let upToDate = 0
+  let adopted = 0
   for (const rp of all) {
     const record = records.get(rp.photo.id)
     if (!record || !isCurrent(record, rp.photo)) {
+      if (!record && dir && (await adoptExisting(dir, rp))) {
+        upToDate++
+        adopted++
+        continue
+      }
       pending.push(rp)
       continue
     }
@@ -151,7 +184,7 @@ export async function planDownloads(all: RemotePhoto[], dir: FileSystemDirectory
     }
     upToDate++
   }
-  return { pending, upToDate }
+  return { pending, upToDate, adopted }
 }
 
 // --- Descarga y verificacion ---
@@ -171,6 +204,8 @@ export interface SyncResult {
   failed: { name: string; reason: string }[]
   /** Fotos que ya estaban y siguen correctas. */
   alreadyOk: number
+  /** De esas, las que la app reconocio en la carpeta sin tenerlas registradas. */
+  adopted: number
 }
 
 async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
@@ -249,6 +284,7 @@ export async function syncDownloads(
     ok: [],
     failed: [],
     alreadyOk: plan.upToDate,
+    adopted: plan.adopted,
   }
 
   for (const [i, rp] of plan.pending.entries()) {
