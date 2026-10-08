@@ -32,6 +32,10 @@ const LIGHT_MESSAGES: Record<LightState, string> = {
 
 export const MAX_SIDE = 3200
 export const PREVIEW_SIDE = 1000
+/** Tamano de la version nitida de la vista previa, que se calcula cuando se deja de mover un ajuste. */
+const LARGE_SIDE = 1800
+/** Tiempo que se deja a la camara para ajustar la exposicion antes de bloquearla. */
+const LOCK_DELAY_MS = 1200
 export const FULL_CROP: Crop = { x: 0, y: 0, w: 1, h: 1 }
 const LOW_RES_WIDTH = 1200
 
@@ -87,6 +91,8 @@ interface Captured {
   full: HTMLCanvasElement
   /** Version reducida para que los ajustes respondan al instante. */
   preview: HTMLCanvasElement
+  /** Version mas grande, para ver la foto nitida cuando no se esta moviendo un ajuste. */
+  large: HTMLCanvasElement
 }
 
 export function scaled(source: HTMLCanvasElement, maxSide: number): HTMLCanvasElement {
@@ -188,6 +194,12 @@ export default function NegativeDeveloper({ onClose }: Props) {
         video.srcObject = stream
         await video.play().catch(() => undefined)
       }
+      // Exposicion y color bloqueados por defecto: se espera un momento a que la camara se ajuste sola a la luz
+      // y despues se fijan. El candado permite liberarlos. Si el dispositivo no puede, queda en automatico.
+      window.setTimeout(async () => {
+        if (streamRef.current !== stream) return
+        if (await applyCameraSettings(track, { lock: true }) && streamRef.current === stream) setLocked(true)
+      }, LOCK_DELAY_MS)
     } catch {
       setCameraError('No se pudo abrir la cámara. Revisa el permiso del navegador o elige una foto desde tus archivos.')
     }
@@ -274,10 +286,21 @@ export default function NegativeDeveloper({ onClose }: Props) {
     return () => window.clearTimeout(id)
   }, [captured, adjust])
 
+  // Version nitida: mientras se mueve un ajuste se ve la rapida (1000 px); al soltarlo se calcula esta (1800 px),
+  // que es la que se ve en reposo. Asi la foto en pantalla se parece mas a lo que se guarda.
+  const [developedLarge, setDevelopedLarge] = useState<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    setDevelopedLarge(null)
+    if (!captured) return
+    const id = window.setTimeout(() => setDevelopedLarge(developNegative(captured.large, adjust)), 450)
+    return () => window.clearTimeout(id)
+  }, [captured, adjust])
+  const base = developedLarge ?? developed
+
   // --- Giro y recorte sobre la foto revelada ---
   const rotated = useMemo(
-    () => (developed ? rotateCanvas(mirrored ? mirrorCanvas(developed) : developed, angle) : null),
-    [developed, angle, mirrored],
+    () => (base ? rotateCanvas(mirrored ? mirrorCanvas(base) : base, angle) : null),
+    [base, angle, mirrored],
   )
   const imgAspect = rotated ? rotated.width / rotated.height : 1
   // Solo se genera la imagen del recorte cuando se esta usando, para no gastar en cada arrastre.
@@ -286,7 +309,7 @@ export default function NegativeDeveloper({ onClose }: Props) {
     [tool, rotated],
   )
   const resultUrl = useMemo(
-    () => (tool !== 'crop' && rotated ? applySpots(cropCanvas(rotated, crop), spots).toDataURL('image/jpeg', 0.9) : null),
+    () => (tool !== 'crop' && rotated ? applySpots(cropCanvas(rotated, crop), spots).toDataURL('image/jpeg', 0.95) : null),
     [tool, rotated, crop, spots],
   )
 
@@ -331,10 +354,10 @@ export default function NegativeDeveloper({ onClose }: Props) {
   }, [crop, angle])
 
   const cropPixels = useMemo(() => {
-    if (!captured || !rotated) return null
-    const scale = captured.full.width / captured.preview.width
+    if (!captured || !rotated || !base) return null
+    const scale = captured.full.width / base.width
     return { w: Math.round(crop.w * rotated.width * scale), h: Math.round(crop.h * rotated.height * scale) }
-  }, [captured, rotated, crop])
+  }, [captured, rotated, crop, base])
 
   const finalCanvas = () => {
     if (!captured) throw new Error('No hay foto')
@@ -377,7 +400,7 @@ export default function NegativeDeveloper({ onClose }: Props) {
         setAdjust(DEFAULT_ADJUST)
         setTool('exposure')
         setSaveError(null)
-        setCaptured({ full, preview: scaled(full, PREVIEW_SIDE) })
+        setCaptured({ full, preview: scaled(full, PREVIEW_SIDE), large: scaled(full, LARGE_SIDE) })
         setStage('edit')
         stopCamera()
       } catch (e) {
