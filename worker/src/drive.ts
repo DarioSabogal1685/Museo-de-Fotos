@@ -8,6 +8,9 @@ export interface Photo {
 	createdTime: string;
 	/** Cambia cuando la foto se edita; la web lo usa para no mostrar una version vieja en cache. */
 	modifiedTime?: string;
+	/** Tamano en bytes y huella MD5 del contenido; la web los usa para saber si una foto ya se descargo completa. */
+	size?: number;
+	md5?: string;
 	width?: number;
 	height?: number;
 	/** Personas marcadas y lugar; se guardan en la descripcion del archivo de Drive. */
@@ -83,6 +86,9 @@ interface DriveFile {
 	mimeType: string;
 	createdTime: string;
 	modifiedTime?: string;
+	/** Drive lo entrega como texto. */
+	size?: string;
+	md5Checksum?: string;
 	description?: string;
 	parents?: string[];
 	thumbnailLink?: string;
@@ -130,6 +136,8 @@ function toPhoto(f: DriveFile): Photo {
 		name: f.name,
 		createdTime: f.createdTime,
 		modifiedTime: f.modifiedTime,
+		size: f.size ? Number(f.size) : undefined,
+		md5: f.md5Checksum,
 		width: f.imageMediaMetadata?.width,
 		height: f.imageMediaMetadata?.height,
 		tags: parseTags(f.description),
@@ -187,7 +195,7 @@ export async function listPhotos(env: Env, roomId: string): Promise<Photo[] | nu
 	do {
 		const params = new URLSearchParams({
 			q: `'${roomId}' in parents and mimeType contains 'image/' and trashed = false`,
-			fields: "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,description,imageMediaMetadata(width,height))",
+			fields: "nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,size,md5Checksum,description,imageMediaMetadata(width,height))",
 			orderBy: "createdTime desc",
 			pageSize: "1000",
 		});
@@ -238,7 +246,7 @@ export async function getPhotoThumbnail(env: Env, id: string, width: number): Pr
 	});
 }
 
-const PHOTO_FIELDS = "id,name,mimeType,createdTime,modifiedTime,description,imageMediaMetadata(width,height)";
+const PHOTO_FIELDS = "id,name,mimeType,createdTime,modifiedTime,size,md5Checksum,description,imageMediaMetadata(width,height)";
 
 /** Cuerpo multipart/related de Drive: metadatos JSON + contenido del archivo. */
 function multipartBody(metadata: object, file: File) {

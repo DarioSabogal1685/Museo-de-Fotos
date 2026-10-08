@@ -290,3 +290,12 @@ button.menu-update:hover { background: #e2bd4a; }
 .select-row .text-input { flex: 1; min-width: 180px; width: auto; }
 .select-row span { color: var(--muted); font-size: .9rem; margin-right: auto; }
 @media (max-width: 600px) { .filter-bar { padding: .75rem .75rem 0; } }
+
+/* --- Descargar fotos --- */
+.disk-warning { color: #fbbf24; font-size: .8rem; white-space: nowrap; }
+.progress-track { height: 12px; border-radius: 6px; background: #2a2420; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); transition: width .2s; }
+.light-hint.big { font-size: 1.1rem; }
+.fail-list { margin: 0; padding-left: 1.2rem; color: #ff7b72; font-size: .9rem; line-height: 1.5; }
+.fail-list strong { color: var(--fg); }
+@media (max-width: 600px) { .header .actions { flex-wrap: wrap; justify-content: flex-end; } }

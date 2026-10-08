@@ -30,6 +30,9 @@ export interface Photo {
   name: string
   createdTime: string
   tags?: PhotoTags
+  /** Tamano en bytes y huella MD5 del contenido (para verificar descargas). */
+  size?: number
+  md5?: string
   /** Cambia al editar la foto; se usa para saltarse la cache del navegador. */
   modifiedTime?: string
   width?: number
