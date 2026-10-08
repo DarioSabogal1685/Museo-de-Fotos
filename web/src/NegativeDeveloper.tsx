@@ -81,11 +81,6 @@ const SLIDER_TOOLS: SliderTool[] = [
   { id: 'dust', icon: '🧹', label: 'Polvo', min: 0, max: 1, step: 0.02 },
 ]
 
-interface ImageCaptureLike {
-  takePhoto(): Promise<Blob>
-}
-type ImageCaptureCtor = new (track: MediaStreamTrack) => ImageCaptureLike
-
 interface Captured {
   /** Foto del negativo en alta resolucion (para el resultado final). */
   full: HTMLCanvasElement
@@ -414,24 +409,10 @@ export default function NegativeDeveloper({ onClose }: Props) {
   const capture = async () => {
     const video = videoRef.current
     if (!video?.videoWidth) return
-    // Si el navegador lo permite, se toma una foto a resolucion completa del sensor.
-    const IC = (window as unknown as { ImageCapture?: ImageCaptureCtor }).ImageCapture
+    // La foto se toma del MISMO video que se ve en pantalla, no del modo de foto fija de la camara: ese modo
+    // procesa la imagen distinto (otro brillo, color y encuadre) y la foto salia diferente a la vista previa.
+    // La resolucion de 4K sobra, porque la foto se reduce a MAX_SIDE de todos modos.
     const track = streamRef.current?.getVideoTracks()[0]
-    if (IC && track) {
-      try {
-        setProcessing(true)
-        // Se bloquea la exposicion y el color justo antes de disparar, para que la foto salga como la vista previa.
-        await applyCameraSettings(track, { lock: true })
-        await new Promise((resolve) => window.setTimeout(resolve, 250))
-        const bitmap = await createImageBitmap(await new IC(track).takePhoto())
-        process(bitmap, bitmap.width, bitmap.height)
-        return
-      } catch {
-        /* se usa el cuadro de video */
-      }
-    }
-    // Sin captura a resolucion completa (por ejemplo en iPhone), se sube la resolucion de la camara
-    // justo antes de tomar el cuadro; la vista en vivo se mantiene en 1080p para que sea fluida.
     if (track) {
       setProcessing(true)
       // En la misma llamada se sube la resolucion y se bloquea la exposicion y el color (cada llamada
