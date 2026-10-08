@@ -402,3 +402,13 @@ button.menu-update:hover { background: #e2bd4a; }
   box-shadow: 0 4px 16px #0008; text-align: center;
 }
 .save-target { flex: 1; align-self: center; font-size: .85rem; color: var(--muted); }
+
+/* --- Foto esperando su version editada --- */
+.pending-banner {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem;
+  margin: .75rem 1.5rem 0; padding: .65rem .9rem; background: #2a2210; border: 1px solid #6b5a1e; border-radius: 8px;
+  font-size: .9rem;
+}
+.pending-actions { display: flex; gap: .5rem; }
+.btn.disabled { opacity: .6; pointer-events: none; }
+@media (max-width: 600px) { .pending-banner { margin: .75rem; } }

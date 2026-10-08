@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import DownloadButton from './DownloadButton'
 import Menu from './Menu'
 import PhotoEditor from './PhotoEditor'
+import { addPending, loadPending, removePending, type Pending } from './pendingReplacements'
 import {
   DEMO,
   deletePhoto,
   fetchPhotos,
+  fetchPhotoBlob,
   fetchRooms,
   movePhoto,
+  replacePhoto,
   fetchTagSuggestions,
   getAdminToken,
   photoUrl,
@@ -49,6 +52,14 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
   const [roomChoices, setRoomChoices] = useState<Room[] | null>(null)
   const [moveBusy, setMoveBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+
+  // Fotos mandadas a la galeria para editarlas fuera de la app y que esperan su version editada.
+  const [pendings, setPendings] = useState<Pending[]>(() => loadPending())
+  const roomPendings = pendings.filter((p) => p.roomId === room.id)
+  const [replacingId, setReplacingId] = useState<string | null>(null)
+  // La foto se descarga en cuanto se abren los botones, para poder compartirla en el mismo toque
+  // (iPhone exige que "compartir" ocurra justo despues del toque, sin esperas de red).
+  const prefetched = useRef<{ id: string; blob: Blob } | null>(null)
   const [showInfo, setShowInfo] = useState(false)
 
   // Filtro por grupo (nombre de negativo).
@@ -151,8 +162,99 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
     return () => document.removeEventListener('pointerdown', onDown)
   }, [menuId])
 
+  // Se descarga por adelantado la foto de los botones que estan abiertos.
+  useEffect(() => {
+    if (!menuId) return
+    const photo = photos.find((p) => p.id === menuId)
+    if (!photo || prefetched.current?.id === photo.id) return
+    let cancelled = false
+    fetchPhotoBlob(photo.id, photo.md5 ?? photo.modifiedTime)
+      .then((blob) => {
+        if (!cancelled) prefetched.current = { id: photo.id, blob }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [menuId, photos])
+
+  const extensionFor = (name: string, type: string) =>
+    /\.[a-z0-9]{2,4}$/i.test(name) ? name : `${name}.${type === 'image/png' ? 'png' : 'jpg'}`
+
+  /** Manda la foto a la galeria del telefono (hoja de compartir -> «Guardar imagen») o, sin ella, la descarga. */
+  const onReplace = async (photo: Photo) => {
+    setMenuId(null)
+    setError(null)
+    try {
+      const blob =
+        prefetched.current?.id === photo.id
+          ? prefetched.current.blob
+          : await fetchPhotoBlob(photo.id, photo.md5 ?? photo.modifiedTime)
+      const file = new File([blob], extensionFor(photo.name, blob.type), { type: blob.type || 'image/jpeg' })
+
+      let how: 'shared' | 'downloaded' = 'downloaded'
+      if (navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: photo.name })
+          how = 'shared'
+        } catch (e) {
+          // Si cerro la hoja sin guardar, no se queda esperando nada.
+          if ((e as Error).name === 'AbortError') return
+        }
+      }
+      if (how === 'downloaded') {
+        const url = URL.createObjectURL(file)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = file.name
+        a.click()
+        window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      }
+      setPendings(addPending({ id: photo.id, name: photo.name, roomId: room.id, at: Date.now() }))
+      setNotice(
+        how === 'shared'
+          ? 'En la hoja que se abrió elige «Guardar imagen». Edítala y vuelve aquí.'
+          : 'La foto se descargó. Edítala y vuelve aquí para subirla.',
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  /** Pone la version editada en lugar de la original (misma foto, sin duplicado). */
+  const applyReplacement = async (pending: Pending, file: File) => {
+    const token = getAdminToken()
+    if (!token) return
+    setReplacingId(pending.id)
+    setError(null)
+    try {
+      const updated = await replacePhoto(pending.id, file, pending.name, token)
+      setPhotos((list) => list.map((p) => (p.id === updated.id ? updated : p)))
+      setPendings(removePending(pending.id))
+      setNotice(`✓ «${pending.name}» se reemplazó por la versión editada, sin duplicarla.`)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setReplacingId(null)
+    }
+  }
+
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return
+
+    // Una sola foto subida mientras hay una en espera: lo normal es que sea su version editada.
+    if (files.length === 1 && roomPendings.length === 1) {
+      const target = roomPendings[0]
+      if (
+        window.confirm(
+          `¿Esta foto es la versión editada de «${target.name}»?\n\nAceptar: reemplaza la original (sin duplicar).\nCancelar: se sube como foto nueva.`,
+        )
+      ) {
+        await applyReplacement(target, files[0])
+        return
+      }
+    }
+
     const token = getAdminToken()
     if (!token) return
     setUploading(true)
@@ -358,6 +460,31 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
         </div>
       )}
 
+      {roomPendings.map((p) => (
+        <div key={p.id} className="pending-banner">
+          <span>⏳ Esperando la versión editada de «{p.name}»</span>
+          <div className="pending-actions">
+            <label className={`btn primary${replacingId === p.id ? ' disabled' : ''}`}>
+              {replacingId === p.id ? 'Subiendo…' : 'Subir editada'}
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                disabled={replacingId !== null}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (file) applyReplacement(p, file)
+                }}
+              />
+            </label>
+            <button className="btn" disabled={replacingId !== null} onClick={() => setPendings(removePending(p.id))}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ))}
+
       {error && <p className="message error">{error}</p>}
       {loading && <p className="message">Cargando…</p>}
       {!loading && !error && photos.length === 0 && <p className="message">Este cuarto está vacío por ahora.</p>}
@@ -437,6 +564,15 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
                   }}
                 >
                   Mover
+                </button>
+                <button
+                  className="card-btn"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onReplace(p)
+                  }}
+                >
+                  Reemplazar
                 </button>
                 <button
                   className="card-btn danger"
