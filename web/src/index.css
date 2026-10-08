@@ -196,8 +196,8 @@ button.menu-item:hover { background: #342c26; }
 }
 .cam-spacer { width: 46px; flex: none; }
 .shutter {
-  width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff; background: #fff;
-  box-shadow: inset 0 0 0 4px #000; cursor: pointer; padding: 0; transition: transform .1s;
+  width: 108px; height: 108px; border-radius: 50%; border: 6px solid #fff; background: #fff;
+  box-shadow: inset 0 0 0 5px #000, 0 2px 12px #0008; cursor: pointer; padding: 0; transition: transform .1s; flex: none;
 }
 .shutter:active { transform: scale(.92); }
 .shutter:disabled { opacity: .4; cursor: not-allowed; }
@@ -361,7 +361,7 @@ button.menu-update:hover { background: #e2bd4a; }
 .cam-top, .cam-bottom { z-index: 2; }
 .cam-icon-on { background: var(--accent); color: #111; }
 .cam-badge {
-  position: absolute; left: 50%; bottom: 7.8rem; transform: translateX(-50%); z-index: 2; pointer-events: none;
+  position: absolute; left: 50%; bottom: 10.2rem; transform: translateX(-50%); z-index: 2; pointer-events: none;
   background: #000a; color: #fff; font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; white-space: nowrap;
 }
 
