@@ -70,6 +70,10 @@ export interface Adjust {
   highlights: number
   /** 0 a 1: fuerza de la eliminacion automatica de polvo y rayones. */
   dust: number
+  /** -1 a 1: sube o baja cada color por separado (rojo, verde y azul). */
+  red: number
+  green: number
+  blue: number
 }
 
 export const DEFAULT_ADJUST: Adjust = {
@@ -83,6 +87,9 @@ export const DEFAULT_ADJUST: Adjust = {
   shadows: 0,
   highlights: 0,
   dust: 0,
+  red: 0,
+  green: 0,
+  blue: 0,
 }
 
 /** Mancha marcada a mano para retocar; coordenadas y radio normalizados (radio respecto al lado mayor). */
@@ -188,8 +195,9 @@ export function developNegative(
   const gains = positive
     ? [1, 1, 1]
     : mean.map((m) => Math.min(Math.max(Math.pow(grayMean / Math.max(m, 0.02), 0.7), 0.6), 1.6))
-  gains[0] *= 1 + 0.15 * adjust.warmth
-  gains[2] *= 1 - 0.15 * adjust.warmth
+  gains[0] *= (1 + 0.15 * adjust.warmth) * (1 + 0.4 * adjust.red)
+  gains[1] *= 1 + 0.4 * adjust.green
+  gains[2] *= (1 - 0.15 * adjust.warmth) * (1 + 0.4 * adjust.blue)
 
   // 4. LUT final por canal: gamma + balance + contraste (curva suave en S).
   const t = adjust.contrast - 1
@@ -486,7 +494,7 @@ function healSpots(data: Uint8ClampedArray, w: number, h: number, spots: Spot[])
 export function autoAdjust(source: HTMLCanvasElement, positive = false): Adjust {
   const neutral: Adjust = {
     exposure: 0, contrast: 1, warmth: 0, saturation: 1,
-    noiseLuma: 0, noiseColor: 0, sharpness: 0, shadows: 0, highlights: 0, dust: 0,
+    noiseLuma: 0, noiseColor: 0, sharpness: 0, shadows: 0, highlights: 0, dust: 0, red: 0, green: 0, blue: 0,
   }
   const small = document.createElement('canvas')
   const scale = Math.min(1, 600 / Math.max(source.width, source.height))
@@ -556,6 +564,9 @@ export function autoAdjust(source: HTMLCanvasElement, positive = false): Adjust 
     shadows: darkFrac > 0.1 ? clamp(darkFrac * 2, 0.15, 0.6) : 0.1,
     highlights: brightFrac > 0.03 ? -clamp(brightFrac * 4, 0.15, 0.6) : 0,
     dust: 0.4,
+    red: 0,
+    green: 0,
+    blue: 0,
   }
 }
 
@@ -572,4 +583,92 @@ export function applySpots(source: HTMLCanvasElement, spots: Spot[]): HTMLCanvas
   healSpots(image.data, out.width, out.height, spots)
   ctx.putImageData(image, 0, 0)
   return out
+}
+
+/** Voltea un canvas de izquierda a derecha (efecto espejo). */
+export function mirrorCanvas(src: HTMLCanvasElement): HTMLCanvasElement {
+  const out = document.createElement('canvas')
+  out.width = src.width
+  out.height = src.height
+  const ctx = out.getContext('2d')
+  if (!ctx) throw new Error('No se pudo voltear la imagen')
+  ctx.translate(out.width, 0)
+  ctx.scale(-1, 1)
+  ctx.drawImage(src, 0, 0)
+  return out
+}
+
+/** Parametros del revelado (los mismos que usa developNegative), listos para enviarse a la tarjeta grafica. */
+export interface LiveParams {
+  low: [number, number, number]
+  high: [number, number, number]
+  exponent: number
+  gains: [number, number, number]
+  contrast: number
+  saturation: number
+}
+
+/** Calcula los parametros del revelado a partir de un cuadro pequeno de la camara. */
+export function liveParams(data: Uint8ClampedArray, w: number, h: number, adjust: Adjust): LiveParams {
+  const x0 = Math.floor(w * 0.1)
+  const x1 = Math.ceil(w * 0.9)
+  const y0 = Math.floor(h * 0.1)
+  const y1 = Math.ceil(h * 0.9)
+  const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)]
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4
+      hist[0][data[i]]++
+      hist[1][data[i + 1]]++
+      hist[2][data[i + 2]]++
+    }
+  }
+  const clip = Math.floor((x1 - x0) * (y1 - y0) * 0.005)
+
+  const low: number[] = []
+  const high: number[] = []
+  for (let c = 0; c < 3; c++) {
+    let lo = 0
+    let acc = 0
+    while (lo < 255 && acc + hist[c][lo] <= clip) acc += hist[c][lo++]
+    let hi = 255
+    acc = 0
+    while (hi > 0 && acc + hist[c][hi] <= clip) acc += hist[c][hi--]
+    if (hi - lo < 8) {
+      lo = 0
+      hi = 255
+    }
+    low.push(lo)
+    high.push(hi)
+  }
+
+  // Medias de la imagen invertida, para exposicion y balance de blancos.
+  const mean = [0, 0, 0]
+  let samples = 0
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4
+      for (let c = 0; c < 3; c++) mean[c] += 1 - clamp01((data[i + c] - low[c]) / (high[c] - low[c]))
+      samples++
+    }
+  }
+  for (let c = 0; c < 3; c++) mean[c] /= samples || 1
+  const lum = 0.299 * mean[0] + 0.587 * mean[1] + 0.114 * mean[2]
+
+  const target = Math.min(Math.max(0.45 + adjust.exposure * 0.2, 0.15), 0.8)
+  const exponent = Math.min(Math.max(Math.log(target) / Math.log(Math.max(lum, 0.02)), 0.4), 2.5)
+  const grayMean = (mean[0] + mean[1] + mean[2]) / 3
+  const gains = mean.map((m) => Math.min(Math.max(Math.pow(grayMean / Math.max(m, 0.02), 0.7), 0.6), 1.6))
+  gains[0] *= (1 + 0.15 * adjust.warmth) * (1 + 0.4 * adjust.red)
+  gains[1] *= 1 + 0.4 * adjust.green
+  gains[2] *= (1 - 0.15 * adjust.warmth) * (1 + 0.4 * adjust.blue)
+
+  return {
+    low: [low[0] / 255, low[1] / 255, low[2] / 255],
+    high: [high[0] / 255, high[1] / 255, high[2] / 255],
+    exponent,
+    gains: [gains[0], gains[1], gains[2]],
+    contrast: adjust.contrast - 1,
+    saturation: adjust.saturation,
+  }
 }

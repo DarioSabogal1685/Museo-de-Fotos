@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { clearAdminToken, fetchRooms, getAdminToken, uploadPhoto, type Room } from './api'
 import Cropper, { fitCrop, type Crop } from './Cropper'
+import { applyCameraSettings } from './cameraLock'
+import { startLivePreview } from './liveDevelop'
 import {
   analyzeLight,
   applySpots,
@@ -8,6 +10,7 @@ import {
   cropCanvas,
   DEFAULT_ADJUST,
   developNegative,
+  mirrorCanvas,
   rotateCanvas,
   type Adjust,
   type LightState,
@@ -47,7 +50,7 @@ export const RATIOS: { key: string; label: string; value: number | null }[] = [
 ]
 
 /** Herramientas de la fila deslizable, como en el editor de fotos del iPhone. */
-type Tool = keyof Adjust | 'crop' | 'retouch'
+type Tool = keyof Adjust | 'crop' | 'mirror' | 'retouch'
 
 interface SliderTool {
   id: keyof Adjust
@@ -65,6 +68,9 @@ const SLIDER_TOOLS: SliderTool[] = [
   { id: 'highlights', icon: '🌕', label: 'Luces', min: -1, max: 1, step: 0.02 },
   { id: 'warmth', icon: '🌡️', label: 'Calidez', min: -1, max: 1, step: 0.02 },
   { id: 'saturation', icon: '🎨', label: 'Color', min: 0, max: 2, step: 0.02 },
+  { id: 'red', icon: '🔴', label: 'Rojo', min: -1, max: 1, step: 0.02 },
+  { id: 'green', icon: '🟢', label: 'Verde', min: -1, max: 1, step: 0.02 },
+  { id: 'blue', icon: '🔵', label: 'Azul', min: -1, max: 1, step: 0.02 },
   { id: 'sharpness', icon: '🔺', label: 'Nitidez', min: 0, max: 1, step: 0.02 },
   { id: 'noiseLuma', icon: '🌫️', label: 'Ruido', min: 0, max: 1, step: 0.02 },
   { id: 'noiseColor', icon: '💧', label: 'Ruido color', min: 0, max: 1, step: 0.02 },
@@ -107,7 +113,10 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const livePreviewRef = useRef<HTMLCanvasElement>(null)
   // Vista previa en vivo: se muestra la foto ya revelada antes de capturar.
-  const [liveOn, setLiveOn] = useState(true)
+  // Al abrir la camara se ve el negativo sin revelar; el boton del ojo activa la vista revelada.
+  const [liveOn, setLiveOn] = useState(false)
+  // Exposicion y balance de blancos bloqueados: la vista previa deja de cambiar sola y coincide con la foto.
+  const [locked, setLocked] = useState(false)
   const streamRef = useRef<MediaStream | null>(null)
   const [stage, setStage] = useState<Stage>('camera')
   const [light, setLight] = useState<LightState>('dark')
@@ -121,6 +130,10 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   const [developed, setDeveloped] = useState<HTMLCanvasElement | null>(null)
 
   // Giro y recorte: siempre sobre la foto ya revelada.
+  // `mirrored` voltea la imagen de izquierda a derecha ANTES de girarla; los botones de espejo lo traducen
+  // a lo que se ve en pantalla (ver flipScreen).
+  const [mirrored, setMirrored] = useState(false)
+  const skipCropReset = useRef({ quarter: false, ratio: false })
   const [quarter, setQuarter] = useState(0)
   const [fine, setFine] = useState(0)
   const [ratioKey, setRatioKey] = useState('free')
@@ -154,13 +167,20 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
 
   const startCamera = async () => {
     setCameraError(null)
+    setLocked(false) // una camara nueva vuelve al modo automatico
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError('Este navegador no permite usar la cámara aquí. Puedes elegir una foto del negativo desde tus archivos.')
       return
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+        // 1080p a 30 cuadros: la vista en vivo es fluida. La maxima resolucion se pide solo al capturar.
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: 30 },
+        },
         audio: false,
       })
       streamRef.current = stream
@@ -203,9 +223,16 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     return () => window.clearInterval(id)
   }, [stage, cameraError])
 
-  // Vista previa en vivo: cada ~0,1 s se revela un cuadro pequeno de la camara y se dibuja en pantalla.
+  // Vista previa en vivo. Lo normal es revelar cada cuadro con la tarjeta grafica (fluido); si el navegador
+  // no tiene WebGL, se revela un cuadro pequeno unas 10 veces por segundo con el procesador.
   useEffect(() => {
     if (stage !== 'camera' || cameraError || !liveOn || processing) return
+    const liveVideo = videoRef.current
+    const liveCanvas = livePreviewRef.current
+    if (liveVideo && liveCanvas) {
+      const stopGpu = startLivePreview(liveVideo, liveCanvas, LIVE_ADJUST)
+      if (stopGpu) return stopGpu
+    }
     let cancelled = false
     let timer = 0
     const scratch = document.createElement('canvas')
@@ -254,7 +281,10 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   }, [captured, adjust])
 
   // --- Giro y recorte sobre la foto revelada ---
-  const rotated = useMemo(() => (developed ? rotateCanvas(developed, angle) : null), [developed, angle])
+  const rotated = useMemo(
+    () => (developed ? rotateCanvas(mirrored ? mirrorCanvas(developed) : developed, angle) : null),
+    [developed, angle, mirrored],
+  )
   const imgAspect = rotated ? rotated.width / rotated.height : 1
   // Solo se genera la imagen del recorte cuando se esta usando, para no gastar en cada arrastre.
   const rotatedUrl = useMemo(
@@ -266,17 +296,40 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     [tool, rotated, crop, spots],
   )
 
-  // Al girar 90 grados se reinicia el recorte.
+  // Al girar 90 grados se reinicia el recorte (salvo que el cambio venga de un espejo, que ya lo ajusta).
   useEffect(() => {
+    if (skipCropReset.current.quarter) {
+      skipCropReset.current.quarter = false
+      return
+    }
     setCrop(ratio ? fitCrop(ratio, imgAspect) : FULL_CROP)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quarter])
 
   // Con proporcion fija, el recuadro se reajusta al cambiar la proporcion o enderezar.
   useEffect(() => {
+    if (skipCropReset.current.ratio) {
+      skipCropReset.current.ratio = false
+      return
+    }
     if (ratio) setCrop(fitCrop(ratio, imgAspect))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratioKey, fine])
+
+  /**
+   * Espejo segun lo que se ve en pantalla. Voltear la imagen ya girada equivale a voltearla antes de girar
+   * y invertir el giro: horizontal -> angulo = -angulo; vertical -> angulo = 180 - angulo.
+   * El recuadro de recorte tambien se refleja para que siga sobre la misma zona.
+   */
+  const flipScreen = (axis: 'h' | 'v') => {
+    const nextQuarter = axis === 'h' ? (4 - quarter) % 4 : (6 - quarter) % 4
+    const nextFine = fine === 0 ? 0 : -fine
+    skipCropReset.current = { quarter: nextQuarter !== quarter, ratio: nextFine !== fine }
+    setMirrored((m) => !m)
+    setQuarter(nextQuarter)
+    setFine(nextFine)
+    setCrop((c) => (axis === 'h' ? { ...c, x: 1 - c.x - c.w } : { ...c, y: 1 - c.y - c.h }))
+  }
 
   // Los retoques manuales dependen del encuadre: si cambia, se descartan.
   useEffect(() => {
@@ -291,7 +344,8 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
 
   const finalCanvas = () => {
     if (!captured) throw new Error('No hay foto')
-    return applySpots(cropCanvas(rotateCanvas(developNegative(captured.full, adjust), angle), crop), spots)
+    const full = developNegative(captured.full, adjust)
+    return applySpots(cropCanvas(rotateCanvas(mirrored ? mirrorCanvas(full) : full, angle), crop), spots)
   }
 
   const addSpot = (e: React.MouseEvent<HTMLImageElement>) => {
@@ -319,6 +373,8 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
         full.width = Math.round(sw * scale)
         full.height = Math.round(sh * scale)
         full.getContext('2d')?.drawImage(source, 0, 0, full.width, full.height)
+        skipCropReset.current = { quarter: false, ratio: false }
+        setMirrored(false)
         setQuarter(0)
         setFine(0)
         setRatioKey('free')
@@ -347,6 +403,9 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     if (IC && track) {
       try {
         setProcessing(true)
+        // Se bloquea la exposicion y el color justo antes de disparar, para que la foto salga como la vista previa.
+        await applyCameraSettings(track, { lock: true })
+        await new Promise((resolve) => window.setTimeout(resolve, 250))
         const bitmap = await createImageBitmap(await new IC(track).takePhoto())
         process(bitmap, bitmap.width, bitmap.height)
         return
@@ -354,8 +413,47 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
         /* se usa el cuadro de video */
       }
     }
+    // Sin captura a resolucion completa (por ejemplo en iPhone), se sube la resolucion de la camara
+    // justo antes de tomar el cuadro; la vista en vivo se mantiene en 1080p para que sea fluida.
+    if (track) {
+      setProcessing(true)
+      // En la misma llamada se sube la resolucion y se bloquea la exposicion y el color (cada llamada
+      // reemplaza a la anterior, y por separado una soltaria a la otra).
+      await applyCameraSettings(track, {
+        lock: true,
+        extra: { width: { ideal: 3840 }, height: { ideal: 2160 } },
+      })
+      await new Promise((resolve) => window.setTimeout(resolve, 450))
+    }
     process(video, video.videoWidth, video.videoHeight)
   }
+
+  /** Bloquea o libera la exposicion y el balance de blancos desde el boton del candado. */
+  const toggleLock = async () => {
+    const track = streamRef.current?.getVideoTracks()[0]
+    if (!track) return
+    const ok = await applyCameraSettings(track, { lock: !locked })
+    if (ok) {
+      setLocked(!locked)
+      setToast(locked ? 'Exposición y color en automático' : '🔒 Exposición y color bloqueados')
+    } else {
+      setToast('Este dispositivo o navegador no permite bloquear la exposición')
+    }
+  }
+
+  // Espacio o Enter disparan la foto (teclado, o control remoto Bluetooth que envie esas teclas).
+  const captureRef = useRef(capture)
+  captureRef.current = capture
+  useEffect(() => {
+    if (stage !== 'camera' || cameraError || processing) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || (e.key !== ' ' && e.key !== 'Enter')) return
+      e.preventDefault()
+      captureRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [stage, cameraError, processing])
 
   const onFile = async (file: File | undefined) => {
     if (!file) return
@@ -400,6 +498,16 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
           <p className={cameraError ? 'cam-hint light-dark' : `cam-hint light-${light}`}>
             {cameraError ?? LIGHT_MESSAGES[light]}
           </p>
+          <button
+            className={`cam-icon${locked ? ' cam-icon-on' : ''}`}
+            aria-label={locked ? 'Liberar exposición y color' : 'Bloquear exposición y color'}
+            aria-pressed={locked}
+            title={locked ? 'Liberar exposición y color' : 'Bloquear exposición y color'}
+            onClick={toggleLock}
+            disabled={Boolean(cameraError)}
+          >
+            {locked ? '🔒' : '🔓'}
+          </button>
         </div>
 
         {toast && <div className="cam-toast">{toast}</div>}
@@ -509,6 +617,8 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
                 <button
                   className="link-btn"
                   onClick={() => {
+                    skipCropReset.current = { quarter: false, ratio: false }
+                    setMirrored(false)
                     setQuarter(0)
                     setFine(0)
                     setRatioKey('free')
@@ -528,6 +638,19 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
                   {cropPixels.w < LOW_RES_WIDTH && ' — baja: acerca más la cámara al negativo.'}
                 </p>
               )}
+            </div>
+          )}
+
+          {tool === 'mirror' && (
+            <div className="crop-panel">
+              <div className="chips">
+                <button className="btn" onClick={() => flipScreen('h')}>↔ Espejo horizontal</button>
+                <button className="btn" onClick={() => flipScreen('v')}>↕ Espejo vertical</button>
+              </div>
+              <p className="hint">
+                Voltea la foto como en un espejo: horizontal cambia izquierda por derecha; vertical cambia arriba por abajo.
+                Toca de nuevo para deshacerlo.
+              </p>
             </div>
           )}
 
@@ -565,6 +688,15 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
           >
             <span className="tool-icon">✂️</span>
             <span>Recortar</span>
+          </button>
+          <button
+            className={`tool${tool === 'mirror' ? ' active' : ''}${mirrored ? ' changed' : ''}`}
+            role="tab"
+            aria-selected={tool === 'mirror'}
+            onClick={() => setTool('mirror')}
+          >
+            <span className="tool-icon">🪞</span>
+            <span>Espejo</span>
           </button>
           {SLIDER_TOOLS.map((t) => (
             <button
