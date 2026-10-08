@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ensureFolder,
-  fetchAllPhotos,
+  fetchRoomPhotos,
   folderReachable,
   getSavedFolder,
   hasPermission,
@@ -12,13 +12,19 @@ import {
   type SyncProgress,
   type SyncResult,
 } from './downloads'
+import type { Room } from './api'
 
 type Check =
   | { state: 'checking' }
   | { state: 'ready'; plan: Plan; total: number; diskMissing: boolean }
   | { state: 'error'; message: string }
 
-export default function DownloadButton() {
+interface Props {
+  /** Cuarto cuyas fotos se descargan. */
+  room: Room
+}
+
+export default function DownloadButton({ room }: Props) {
   const [check, setCheck] = useState<Check>({ state: 'checking' })
   const [open, setOpen] = useState(false)
   const [running, setRunning] = useState(false)
@@ -30,7 +36,7 @@ export default function DownloadButton() {
   const refresh = async () => {
     setCheck({ state: 'checking' })
     try {
-      const all = await fetchAllPhotos()
+      const all = await fetchRoomPhotos(room)
       let dir: FileSystemDirectoryHandle | null = null
       let diskMissing = false
       if (supportsFolders) {
@@ -49,7 +55,7 @@ export default function DownloadButton() {
 
   useEffect(() => {
     refresh()
-  }, [])
+  }, [room.id])
 
   const start = async (forcePick = false) => {
     setOpen(true)
@@ -68,7 +74,7 @@ export default function DownloadButton() {
           )
         }
       }
-      const all = await fetchAllPhotos()
+      const all = await fetchRoomPhotos(room)
       setResult(await syncDownloads(all, dir, setProgress))
       await refresh()
     } catch (e) {
@@ -103,9 +109,9 @@ export default function DownloadButton() {
       {check.state === 'ready' && check.diskMissing && <span className="disk-warning">💾 Disco no conectado</span>}
 
       {open && (
-        <div className="modal" role="dialog" aria-modal="true" aria-label="Descargar fotos">
+        <div className="modal" role="dialog" aria-modal="true" aria-label={`Descargar fotos de ${room.name}`}>
           <div className="modal-head">
-            <h2>Descargar fotos</h2>
+            <h2>Descargar «{room.name}»</h2>
             <button className="btn" onClick={() => setOpen(false)} disabled={running}>Cerrar</button>
           </div>
 

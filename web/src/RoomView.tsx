@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import DownloadButton from './DownloadButton'
 import Menu from './Menu'
 import PhotoEditor from './PhotoEditor'
 import {
+  DEMO,
   deletePhoto,
   fetchPhotos,
   fetchTagSuggestions,
@@ -270,6 +272,7 @@ export default function RoomView({ room, onBack }: Props) {
               }}
             />
           </label>
+          {!DEMO && <DownloadButton room={room} />}
           <Menu currentRoomId={room.id} />
         </div>
       </div>

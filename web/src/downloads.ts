@@ -1,4 +1,4 @@
-import { fetchPhotos, fetchRooms, photoUrl, type Photo, type Room } from './api'
+import { fetchPhotos, photoUrl, type Photo, type Room } from './api'
 
 export interface RemotePhoto {
   room: Room
@@ -105,10 +105,10 @@ export async function ensureFolder(forcePick = false): Promise<FileSystemDirecto
 }
 
 // --- Lista de fotos y plan de descarga ---
-export async function fetchAllPhotos(): Promise<RemotePhoto[]> {
-  const rooms = await fetchRooms()
-  const lists = await Promise.all(rooms.map((room) => fetchPhotos(room.id).then((photos) => photos.map((photo) => ({ room, photo })))))
-  return lists.flat()
+/** Fotos de un cuarto, listas para planificar su descarga. */
+export async function fetchRoomPhotos(room: Room): Promise<RemotePhoto[]> {
+  const photos = await fetchPhotos(room.id)
+  return photos.map((photo) => ({ room, photo }))
 }
 
 const sanitize = (name: string) =>

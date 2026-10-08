@@ -298,4 +298,4 @@ button.menu-update:hover { background: #e2bd4a; }
 .light-hint.big { font-size: 1.1rem; }
 .fail-list { margin: 0; padding-left: 1.2rem; color: #ff7b72; font-size: .9rem; line-height: 1.5; }
 .fail-list strong { color: var(--fg); }
-@media (max-width: 600px) { .header .actions { flex-wrap: wrap; justify-content: flex-end; } }
+@media (max-width: 600px) { .header .actions, .toolbar .actions { flex-wrap: wrap; justify-content: flex-end; } }

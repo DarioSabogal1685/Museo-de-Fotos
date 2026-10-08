@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
-import { createRoom, DEMO, fetchRooms, getAdminToken, type Room } from './api'
+import { createRoom, fetchRooms, getAdminToken, type Room } from './api'
 import House from './House'
-import DownloadButton from './DownloadButton'
 import Menu from './Menu'
 import RoomView from './RoomView'
 
@@ -42,7 +41,6 @@ export default function App() {
       <header className="header">
         <h1>Museo de Fotos</h1>
         <div className="actions">
-          {!DEMO && <DownloadButton />}
           <button className="btn primary" onClick={onNewRoom}>Nuevo cuarto</button>
           <Menu />
         </div>
