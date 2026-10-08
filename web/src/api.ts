@@ -127,6 +127,16 @@ export function setRoomCover(roomId: string, photoId: string | null, token: stri
   })
 }
 
+/** Pasa una foto a otra sala. */
+export function movePhoto(id: string, roomId: string, token: string) {
+  if (DEMO) return demoOnly()
+  return request<Photo>(`/api/photos/${id}`, {
+    method: 'PATCH',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ room: roomId }),
+  })
+}
+
 export function deletePhoto(id: string, token: string) {
   if (DEMO) return demoOnly()
   return request<{ ok: true }>(`/api/photos/${id}`, { method: 'DELETE', headers: auth(token) })

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { clearAdminToken, fetchRooms, getAdminToken, uploadPhoto, type Room } from './api'
+import { clearAdminToken, createRoom, fetchRooms, getAdminToken, uploadPhoto } from './api'
 import Cropper, { fitCrop, type Crop } from './Cropper'
 import { applyCameraSettings } from './cameraLock'
 import { startLivePreview } from './liveDevelop'
@@ -18,7 +18,6 @@ import {
 } from './develop'
 
 interface Props {
-  defaultRoomId?: string
   onClose: () => void
 }
 
@@ -110,7 +109,12 @@ const displayValue = (tool: SliderTool, value: number) => {
   return v > 0 ? `+${v}` : `${v}`
 }
 
-export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
+/** Sala donde se guardan siempre las fotos reveladas. Desde ahi se pasan a la sala que corresponda. */
+const STAGING_ROOM = 'Cuarto de revelaciones'
+const normalizeName = (s: string) =>
+  s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+
+export default function NegativeDeveloper({ onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const livePreviewRef = useRef<HTMLCanvasElement>(null)
   // Vista previa en vivo: se muestra la foto ya revelada antes de capturar.
@@ -144,22 +148,11 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   const [spots, setSpots] = useState<Spot[]>([])
   const [brush, setBrush] = useState(0.012)
 
-  const [rooms, setRooms] = useState<Room[]>([])
-  const [roomId, setRoomId] = useState(defaultRoomId ?? '')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
   const angle = quarter * 90 + fine
   const ratio = RATIOS.find((r) => r.key === ratioKey)?.value ?? null
-
-  useEffect(() => {
-    fetchRooms()
-      .then((list) => {
-        setRooms(list)
-        setRoomId((current) => current || list[0]?.id || '')
-      })
-      .catch(() => setRooms([]))
-  }, [])
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop())
@@ -464,16 +457,19 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
 
   // --- Guardar y pasar solo a la foto siguiente ---
   const save = async () => {
-    if (!roomId) return
     const token = getAdminToken()
     if (!token) return
     setSaving(true)
     setSaveError(null)
     try {
       const blob = await toBlob(finalCanvas())
-      await uploadPhoto(roomId, new File([blob], `negativo-revelado-${Date.now()}.jpg`, { type: 'image/jpeg' }), token)
-      const roomName = rooms.find((r) => r.id === roomId)?.name ?? 'el cuarto'
-      setToast(`✓ Foto guardada en «${roomName}». Lista para la siguiente.`)
+      // La sala se busca por nombre en cada guardado; si no existe, se crea.
+      const rooms = await fetchRooms()
+      const room =
+        rooms.find((r) => normalizeName(r.name) === normalizeName(STAGING_ROOM)) ??
+        (await createRoom(STAGING_ROOM, token))
+      await uploadPhoto(room.id, new File([blob], `negativo-revelado-${Date.now()}.jpg`, { type: 'image/jpeg' }), token)
+      setToast(`✓ Foto guardada en «${room.name}». Lista para la siguiente.`)
       // Vuelve directo a la camara para tomar la siguiente foto.
       setCaptured(null)
       setStage('camera')
@@ -722,23 +718,10 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
           </button>
         </div>
 
-        {/* Guardar en el cuarto elegido */}
+        {/* Las fotos reveladas siempre van a la sala de revelado; desde ahi se pasan a otra sala */}
         <div className="save-line">
-          <select
-            aria-label="Cuarto donde guardar"
-            value={roomId}
-            onChange={(e) => {
-              setRoomId(e.target.value)
-              setSaveError(null)
-            }}
-            disabled={saving || rooms.length === 0}
-          >
-            {rooms.length === 0 && <option value="">No hay cuartos</option>}
-            {rooms.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
-          <button className="btn primary" onClick={save} disabled={saving || !roomId || !developed}>
+          <span className="save-target">Se guardará en «{STAGING_ROOM}»</span>
+          <button className="btn primary" onClick={save} disabled={saving || !developed}>
             {saving ? 'Guardando…' : 'Guardar en Drive'}
           </button>
         </div>

@@ -6,6 +6,8 @@ import {
   DEMO,
   deletePhoto,
   fetchPhotos,
+  fetchRooms,
+  movePhoto,
   fetchTagSuggestions,
   getAdminToken,
   photoUrl,
@@ -41,6 +43,12 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
   const [uploading, setUploading] = useState(false)
   const [menuId, setMenuId] = useState<string | null>(null)
   const [editing, setEditing] = useState<Photo | null>(null)
+
+  // Pasar una foto a otra sala.
+  const [moving, setMoving] = useState<Photo | null>(null)
+  const [roomChoices, setRoomChoices] = useState<Room[] | null>(null)
+  const [moveBusy, setMoveBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
   const [showInfo, setShowInfo] = useState(false)
 
   // Filtro por grupo (nombre de negativo).
@@ -103,6 +111,10 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (editing) return
+      if (moving) {
+        if (e.key === 'Escape' && !moveBusy) setMoving(null)
+        return
+      }
       if (e.key === 'Escape' && menuId) {
         setMenuId(null)
         return
@@ -120,7 +132,14 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, visible.length, onBack, menuId, editing, selecting])
+  }, [selected, visible.length, onBack, menuId, editing, selecting, moving, moveBusy])
+
+  // El aviso de "foto movida" desaparece solo.
+  useEffect(() => {
+    if (!notice) return
+    const id = window.setTimeout(() => setNotice(null), 4000)
+    return () => window.clearTimeout(id)
+  }, [notice])
 
   // Toca fuera de los botones: se cierran.
   useEffect(() => {
@@ -145,6 +164,40 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
       setError((e as Error).message)
     } finally {
       setUploading(false)
+    }
+  }
+
+  const openMove = (photo: Photo) => {
+    setMenuId(null)
+    setMoving(photo)
+    setRoomChoices(null)
+    setError(null)
+    fetchRooms()
+      .then((list) => setRoomChoices(list.filter((r) => r.id !== room.id)))
+      .catch((e: Error) => {
+        setMoving(null)
+        setError(e.message)
+      })
+  }
+
+  const doMove = async (target: Room) => {
+    if (!moving) return
+    const token = getAdminToken()
+    if (!token) return
+    setMoveBusy(true)
+    try {
+      await movePhoto(moving.id, target.id, token)
+      const moved = moving
+      setPhotos((list) => list.filter((p) => p.id !== moved.id))
+      // Si era la portada de esta sala, vuelve a mostrarse la primera foto que quede.
+      if (room.cover === moved.id) onRoomUpdated({ ...room, cover: photos.find((p) => p.id !== moved.id)?.id })
+      setNotice(`✓ «${moved.name}» pasó a «${target.name}».`)
+      setMoving(null)
+    } catch (e) {
+      setError((e as Error).message)
+      setMoving(null)
+    } finally {
+      setMoveBusy(false)
     }
   }
 
@@ -288,7 +341,7 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
             />
           </label>
           {!DEMO && <DownloadButton room={room} />}
-          <Menu currentRoomId={room.id} />
+          <Menu />
         </div>
       </div>
 
@@ -377,6 +430,15 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
                   ★ Portada
                 </button>
                 <button
+                  className="card-btn"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openMove(p)
+                  }}
+                >
+                  Mover
+                </button>
+                <button
                   className="card-btn danger"
                   onClick={(e) => {
                     e.stopPropagation()
@@ -453,6 +515,33 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {notice && <div className="move-toast">{notice}</div>}
+
+      {moving && (
+        <div className="sheet-backdrop" onClick={() => !moveBusy && setMoving(null)}>
+          <div className="sheet" role="dialog" aria-modal="true" aria-label="Mover foto" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-head">
+              <strong>Mover «{moving.name}» a…</strong>
+              <button className="btn" onClick={() => setMoving(null)} disabled={moveBusy}>Cancelar</button>
+            </div>
+            {roomChoices === null && <p className="hint">Cargando salas…</p>}
+            {roomChoices?.length === 0 && <p className="hint">No hay otras salas. Crea una con «Nuevo cuarto» en la casa.</p>}
+            <div className="sheet-list">
+              {roomChoices?.map((r) => (
+                <button key={r.id} className="sheet-item" disabled={moveBusy} onClick={() => doMove(r)}>
+                  {r.cover ? (
+                    <img src={thumbUrl(r.cover, 120)} alt="" draggable={false} onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+                  ) : (
+                    <span className="sheet-noimg" />
+                  )}
+                  <span>{r.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

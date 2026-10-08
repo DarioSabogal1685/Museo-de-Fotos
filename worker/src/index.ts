@@ -5,6 +5,7 @@ import {
 	listPhotos,
 	listRooms,
 	listTagSuggestions,
+	movePhoto,
 	replacePhoto,
 	sanitizeTags,
 	setRoomCover,
@@ -142,10 +143,14 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 			return cachedImage(request, env, ctx, () => getPhotoContent(env, id));
 		}
 
-		// Cambiar nombre y/o etiquetas: PATCH con JSON { name?, tags? }.
+		// Cambiar nombre y/o etiquetas, o mover a otra sala: PATCH con JSON { name?, tags?, room? }.
 		if (request.method === "PATCH" && !isThumb) {
 			if (!(await isAdmin(request, env))) return json(env, { error: "No autorizado" }, 401);
-			const body = (await request.json().catch(() => null)) as { name?: unknown; tags?: unknown } | null;
+			const body = (await request.json().catch(() => null)) as { name?: unknown; tags?: unknown; room?: unknown } | null;
+			if (typeof body?.room === "string") {
+				const moved = await movePhoto(env, id, body.room);
+				return moved ? json(env, moved) : json(env, { error: "Foto o sala no encontrada" }, 404);
+			}
 			const name = typeof body?.name === "string" ? body.name.trim().slice(0, 120) : "";
 			const tags = body?.tags === undefined ? undefined : sanitizeTags(body.tags);
 			if (body?.tags !== undefined && !tags) return json(env, { error: "Etiquetas no validas" }, 400);

@@ -399,6 +399,34 @@ export async function replacePhoto(env: Env, id: string, file: File, name?: stri
 	return toPhoto((await res.json()) as DriveFile);
 }
 
+/** Pasa una foto de su sala a otra (cambia su carpeta de Drive; la imagen y sus etiquetas no se tocan). */
+export async function movePhoto(env: Env, id: string, toRoomId: string): Promise<Photo | null> {
+	const meta = await getPhotoMeta(env, id);
+	if (!meta) return null;
+	const rooms = await listRooms(env);
+	if (!rooms.some((r) => r.id === toRoomId)) return null;
+	const fromRoom = rooms.find((r) => meta.parents?.includes(r.id));
+	if (!fromRoom) return null;
+	if (fromRoom.id === toRoomId) return toPhoto(meta);
+
+	const params = new URLSearchParams({
+		addParents: toRoomId,
+		removeParents: fromRoom.id,
+		fields: PHOTO_FIELDS,
+	});
+	const res = await driveFetch(env, `${DRIVE_API}/files/${encodeURIComponent(id)}?${params}`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: "{}",
+	});
+	if (!res.ok) throw new Error(`Drive mover fallo (${res.status})`);
+
+	// Si era la portada de la sala de origen, esa sala vuelve a usar su primera foto.
+	if (fromRoom.cover === id) await setRoomCover(env, fromRoom.id, null).catch(() => undefined);
+	cachedRooms = null;
+	return toPhoto((await res.json()) as DriveFile);
+}
+
 /** Manda la foto a la papelera de Drive (se puede recuperar desde ahi). */
 export async function trashPhoto(env: Env, id: string): Promise<boolean> {
 	const meta = await getPhotoMeta(env, id);

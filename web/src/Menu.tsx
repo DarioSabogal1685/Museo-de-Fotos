@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import NegativeDeveloper from './NegativeDeveloper'
 
-interface Props {
-  /** Cuarto donde se esta (se preselecciona al guardar una foto revelada). */
-  currentRoomId?: string
-}
 
 type UpdateState =
   | { status: 'idle' }
@@ -24,7 +20,7 @@ function compareVersions(a: string, b: string): number {
   return 0
 }
 
-export default function Menu({ currentRoomId }: Props) {
+export default function Menu() {
   const [open, setOpen] = useState(false)
   const [developing, setDeveloping] = useState(false)
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
@@ -112,7 +108,7 @@ export default function Menu({ currentRoomId }: Props) {
         </div>
       )}
 
-      {developing && <NegativeDeveloper defaultRoomId={currentRoomId} onClose={() => setDeveloping(false)} />}
+      {developing && <NegativeDeveloper onClose={() => setDeveloping(false)} />}
     </div>
   )
 }

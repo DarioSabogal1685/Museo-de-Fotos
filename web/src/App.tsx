@@ -40,7 +40,13 @@ export default function App() {
     setCurrent(room)
   }
 
-  if (current) return <RoomView room={current} onBack={() => setCurrent(null)} onRoomUpdated={updateRoom} />
+  // Al volver a la casa se recargan las salas: sus portadas pueden haber cambiado al mover o borrar fotos.
+  const backToHouse = () => {
+    setCurrent(null)
+    load()
+  }
+
+  if (current) return <RoomView room={current} onBack={backToHouse} onRoomUpdated={updateRoom} />
 
   return (
     <>
