@@ -7,6 +7,7 @@ import {
 	listTagSuggestions,
 	replacePhoto,
 	sanitizeTags,
+	setRoomCover,
 	trashPhoto,
 	updatePhotoMeta,
 	uploadPhoto,
@@ -85,6 +86,17 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
 		const name = typeof body?.name === "string" ? body.name.trim().slice(0, 60) : "";
 		if (!name) return json(env, { error: "Falta el nombre del cuarto" }, 400);
 		return json(env, await createRoom(env, name), 201);
+	}
+
+	// Elegir la portada de una sala: PATCH con JSON { cover: "idDeFoto" | null }.
+	const roomOnly = pathname.match(/^\/api\/rooms\/([\w-]+)$/);
+	if (roomOnly && request.method === "PATCH") {
+		if (!(await isAdmin(request, env))) return json(env, { error: "No autorizado" }, 401);
+		const body = (await request.json().catch(() => null)) as { cover?: unknown } | null;
+		const cover = body?.cover;
+		if (cover !== null && typeof cover !== "string") return json(env, { error: "Falta la foto de portada" }, 400);
+		const room = await setRoomCover(env, roomOnly[1], cover);
+		return room ? json(env, room) : json(env, { error: "Sala o foto no encontrada" }, 404);
 	}
 
 	const roomMatch = pathname.match(/^\/api\/rooms\/([\w-]+)\/photos$/);

@@ -74,6 +74,8 @@ export interface Adjust {
   red: number
   green: number
   blue: number
+  /** 0 a 1: compensa sombras y brillos anchos de la toma (luz despareja al fotografiar el negativo). */
+  evenLight: number
 }
 
 export const DEFAULT_ADJUST: Adjust = {
@@ -90,6 +92,7 @@ export const DEFAULT_ADJUST: Adjust = {
   red: 0,
   green: 0,
   blue: 0,
+  evenLight: 0,
 }
 
 /** Mancha marcada a mano para retocar; coordenadas y radio normalizados (radio respecto al lado mayor). */
@@ -126,6 +129,8 @@ export function developNegative(
   const h = source.height
   const image = srcCtx.getImageData(0, 0, w, h)
   const { data } = image
+  // Luz pareja: se compensan las sombras y brillos anchos de la toma antes de medir los niveles.
+  if (adjust.evenLight > 0) flattenIllumination(source, data, w, h, adjust.evenLight)
 
   // 1. Histograma por canal, solo del 80 % central.
   const x0 = Math.floor(w * 0.1)
@@ -494,7 +499,7 @@ function healSpots(data: Uint8ClampedArray, w: number, h: number, spots: Spot[])
 export function autoAdjust(source: HTMLCanvasElement, positive = false): Adjust {
   const neutral: Adjust = {
     exposure: 0, contrast: 1, warmth: 0, saturation: 1,
-    noiseLuma: 0, noiseColor: 0, sharpness: 0, shadows: 0, highlights: 0, dust: 0, red: 0, green: 0, blue: 0,
+    noiseLuma: 0, noiseColor: 0, sharpness: 0, shadows: 0, highlights: 0, dust: 0, red: 0, green: 0, blue: 0, evenLight: 0,
   }
   const small = document.createElement('canvas')
   const scale = Math.min(1, 600 / Math.max(source.width, source.height))
@@ -567,6 +572,7 @@ export function autoAdjust(source: HTMLCanvasElement, positive = false): Adjust 
     red: 0,
     green: 0,
     blue: 0,
+    evenLight: 0,
   }
 }
 
@@ -670,5 +676,74 @@ export function liveParams(data: Uint8ClampedArray, w: number, h: number, adjust
     gains: [gains[0], gains[1], gains[2]],
     contrast: adjust.contrast - 1,
     saturation: adjust.saturation,
+  }
+}
+
+/**
+ * Luz pareja: estima como se reparte la luz en toda la toma (la imagen reducida a una cuadricula diminuta, suavizada)
+ * y la compensa, de modo que las sombras y los brillos anchos que no son del negativo se atenuen.
+ * Es una aproximacion: tambien suaviza un poco los contrastes muy anchos de la propia escena.
+ */
+function flattenIllumination(source: HTMLCanvasElement, data: Uint8ClampedArray, w: number, h: number, strength: number) {
+  const sw = Math.max(4, Math.min(24, w))
+  const sh = Math.max(4, Math.round((sw * h) / w))
+
+  // Se reduce a la mitad varias veces para que cada celda sea un promedio real y no un muestreo.
+  let current: HTMLCanvasElement = source
+  while (current.width / 2 > sw && current.height / 2 > sh) {
+    const half = document.createElement('canvas')
+    half.width = Math.ceil(current.width / 2)
+    half.height = Math.ceil(current.height / 2)
+    const hc = half.getContext('2d')
+    if (!hc) return
+    hc.imageSmoothingQuality = 'high'
+    hc.drawImage(current, 0, 0, half.width, half.height)
+    current = half
+  }
+  const small = document.createElement('canvas')
+  small.width = sw
+  small.height = sh
+  const sc = small.getContext('2d', { willReadFrequently: true })
+  if (!sc) return
+  sc.imageSmoothingQuality = 'high'
+  sc.drawImage(current, 0, 0, sw, sh)
+  const px = sc.getImageData(0, 0, sw, sh).data
+
+  const lum = new Float32Array(sw * sh)
+  let sum = 0
+  for (let p = 0, i = 0; p < lum.length; p++, i += 4) {
+    lum[p] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]
+    sum += lum[p]
+  }
+  const mean = sum / lum.length
+  const light = boxBlur(lum, sw, sh, 1)
+  const exponent = 0.7 * strength
+
+  // Posiciones y pesos de la interpolacion bilineal, calculados una vez por columna y por fila.
+  const xs0 = new Int32Array(w)
+  const xs1 = new Int32Array(w)
+  const xt = new Float32Array(w)
+  for (let x = 0; x < w; x++) {
+    const fx = Math.min(Math.max(((x + 0.5) / w) * sw - 0.5, 0), sw - 1)
+    xs0[x] = Math.floor(fx)
+    xs1[x] = Math.min(xs0[x] + 1, sw - 1)
+    xt[x] = fx - xs0[x]
+  }
+
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(Math.max(((y + 0.5) / h) * sh - 0.5, 0), sh - 1)
+    const y0 = Math.floor(fy)
+    const y1 = Math.min(y0 + 1, sh - 1)
+    const ty = fy - y0
+    for (let x = 0; x < w; x++) {
+      const top = light[y0 * sw + xs0[x]] * (1 - xt[x]) + light[y0 * sw + xs1[x]] * xt[x]
+      const bottom = light[y1 * sw + xs0[x]] * (1 - xt[x]) + light[y1 * sw + xs1[x]] * xt[x]
+      const local = top * (1 - ty) + bottom * ty
+      const gain = Math.pow(Math.min(Math.max(mean / Math.max(local, 1), 0.5), 2), exponent)
+      const i = (y * w + x) * 4
+      data[i] *= gain
+      data[i + 1] *= gain
+      data[i + 2] *= gain
+    }
   }
 }

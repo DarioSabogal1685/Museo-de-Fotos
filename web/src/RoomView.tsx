@@ -11,6 +11,7 @@ import {
   photoUrl,
   sortLeftToRight,
   thumbUrl,
+  setRoomCover,
   updatePhotoMeta,
   uploadPhoto,
   type Photo,
@@ -21,6 +22,8 @@ import {
 interface Props {
   room: Room
   onBack: () => void
+  /** Se llama cuando cambia algo de la sala (por ejemplo, su portada). */
+  onRoomUpdated: (room: Room) => void
 }
 
 const LONG_PRESS_MS = 500
@@ -30,7 +33,7 @@ const NO_GROUP = '__none__'
 const hasInfo = (photo: Photo) =>
   Boolean(photo.tags && (photo.tags.place || photo.tags.people.length > 0 || photo.tags.group))
 
-export default function RoomView({ room, onBack }: Props) {
+export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
   const [photos, setPhotos] = useState<Photo[]>([])
   const [selected, setSelected] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
@@ -142,6 +145,18 @@ export default function RoomView({ room, onBack }: Props) {
       setError((e as Error).message)
     } finally {
       setUploading(false)
+    }
+  }
+
+  const onSetCover = async (photo: Photo) => {
+    setMenuId(null)
+    const token = getAdminToken()
+    if (!token) return
+    try {
+      onRoomUpdated(await setRoomCover(room.id, photo.id, token))
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
     }
   }
 
@@ -277,6 +292,19 @@ export default function RoomView({ room, onBack }: Props) {
         </div>
       </div>
 
+      {room.cover && (
+        <div className="room-banner">
+          <img
+            src={thumbUrl(room.cover, 900)}
+            alt={`Portada de ${room.name}`}
+            draggable={false}
+            onError={(e) => {
+              e.currentTarget.parentElement!.style.display = 'none'
+            }}
+          />
+        </div>
+      )}
+
       {error && <p className="message error">{error}</p>}
       {loading && <p className="message">Cargando…</p>}
       {!loading && !error && photos.length === 0 && <p className="message">Este cuarto está vacío por ahora.</p>}
@@ -326,6 +354,7 @@ export default function RoomView({ room, onBack }: Props) {
           >
             <img src={thumbUrl(p.id, 400, p.modifiedTime)} alt={p.name} loading="lazy" draggable={false} />
             {selecting && <span className="card-check">{picked.has(p.id) ? '✓' : ''}</span>}
+            {!selecting && room.cover === p.id && <span className="cover-badge">★ Portada</span>}
             {menuId === p.id && (
               <div className="card-actions" data-actions>
                 <button
@@ -337,6 +366,15 @@ export default function RoomView({ room, onBack }: Props) {
                   }}
                 >
                   Editar
+                </button>
+                <button
+                  className="card-btn"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSetCover(p)
+                  }}
+                >
+                  ★ Portada
                 </button>
                 <button
                   className="card-btn danger"

@@ -1,6 +1,8 @@
 export interface Room {
   id: string
   name: string
+  /** Id de la foto de portada: la elegida o, si no hay, la primera de la sala. */
+  cover?: string
 }
 
 export interface PersonTag {
@@ -44,7 +46,7 @@ const API: string | undefined = import.meta.env.VITE_API_URL || undefined
 export const DEMO = !API
 
 const DEMO_ROOMS: Room[] = ['Sala', 'Comedor', 'Cocina', 'Biblioteca', 'Jardín', 'Estudio', 'Terraza'].map(
-  (name, i) => ({ id: `demo${i}`, name }),
+  (name, i) => ({ id: `demo${i}`, name, cover: `demo${i}-0` }),
 )
 
 /** Imagen de ejemplo generada a partir del id (degradado + etiqueta). */
@@ -112,6 +114,16 @@ export function uploadPhoto(roomId: string, file: File, token: string) {
     method: 'POST',
     headers: auth(token),
     body,
+  })
+}
+
+/** Elige la foto de portada de una sala, o la quita (null) para volver a usar la primera. */
+export function setRoomCover(roomId: string, photoId: string | null, token: string) {
+  if (DEMO) return demoOnly()
+  return request<Room>(`/api/rooms/${roomId}`, {
+    method: 'PATCH',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cover: photoId }),
   })
 }
 

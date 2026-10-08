@@ -34,7 +34,13 @@ export default function App() {
     }
   }
 
-  if (current) return <RoomView room={current} onBack={() => setCurrent(null)} />
+  // Cuando cambia algo de la sala (por ejemplo su portada) se actualiza tambien la casa.
+  const updateRoom = (room: Room) => {
+    setRooms((list) => list.map((r) => (r.id === room.id ? room : r)))
+    setCurrent(room)
+  }
+
+  if (current) return <RoomView room={current} onBack={() => setCurrent(null)} onRoomUpdated={updateRoom} />
 
   return (
     <>

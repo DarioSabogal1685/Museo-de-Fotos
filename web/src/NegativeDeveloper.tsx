@@ -66,6 +66,7 @@ const SLIDER_TOOLS: SliderTool[] = [
   { id: 'contrast', icon: '◐', label: 'Contraste', min: 0, max: 2, step: 0.02 },
   { id: 'shadows', icon: '🌑', label: 'Sombras', min: -1, max: 1, step: 0.02 },
   { id: 'highlights', icon: '🌕', label: 'Luces', min: -1, max: 1, step: 0.02 },
+  { id: 'evenLight', icon: '💡', label: 'Luz pareja', min: 0, max: 1, step: 0.02 },
   { id: 'warmth', icon: '🌡️', label: 'Calidez', min: -1, max: 1, step: 0.02 },
   { id: 'saturation', icon: '🎨', label: 'Color', min: 0, max: 2, step: 0.02 },
   { id: 'red', icon: '🔴', label: 'Rojo', min: -1, max: 1, step: 0.02 },

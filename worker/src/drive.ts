@@ -78,6 +78,8 @@ function parseTags(description?: string): PhotoTags | undefined {
 export interface Room {
 	id: string;
 	name: string;
+	/** Id de la foto que sirve de portada: la elegida o, si no hay, la primera de la sala. */
+	cover?: string;
 }
 
 interface DriveFile {
@@ -154,19 +156,60 @@ export async function listRooms(env: Env): Promise<Room[]> {
 	do {
 		const params = new URLSearchParams({
 			q: `'${env.DRIVE_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-			fields: "nextPageToken,files(id,name)",
+			fields: "nextPageToken,files(id,name,appProperties)",
 			orderBy: "name",
 			pageSize: "100",
 		});
 		if (pageToken) params.set("pageToken", pageToken);
 		const res = await driveFetch(env, `${DRIVE_API}/files?${params}`);
 		if (!res.ok) throw new Error(`Drive list de cuartos fallo (${res.status})`);
-		const data = (await res.json()) as { files: Room[]; nextPageToken?: string };
-		rooms.push(...data.files.map((f) => ({ id: f.id, name: f.name })));
+		const data = (await res.json()) as {
+			files: { id: string; name: string; appProperties?: { cover?: string } }[];
+			nextPageToken?: string;
+		};
+		rooms.push(...data.files.map((f) => ({ id: f.id, name: f.name, cover: f.appProperties?.cover })));
 		pageToken = data.nextPageToken;
 	} while (pageToken);
+
+	// Las salas sin portada elegida usan su primera foto.
+	await Promise.all(
+		rooms.filter((r) => !r.cover).map(async (room) => {
+			room.cover = await firstPhotoId(env, room.id);
+		}),
+	);
+
 	cachedRooms = { rooms, expiresAt: Date.now() + 60_000 };
 	return rooms;
+}
+
+async function firstPhotoId(env: Env, roomId: string): Promise<string | undefined> {
+	const params = new URLSearchParams({
+		q: `'${roomId}' in parents and mimeType contains 'image/' and trashed = false`,
+		fields: "files(id)",
+		orderBy: "createdTime",
+		pageSize: "1",
+	});
+	const res = await driveFetch(env, `${DRIVE_API}/files?${params}`);
+	if (!res.ok) return undefined;
+	return ((await res.json()) as { files: { id: string }[] }).files[0]?.id;
+}
+
+/** Elige la foto de portada de una sala (o la quita con null, volviendo a la primera foto). */
+export async function setRoomCover(env: Env, roomId: string, photoId: string | null): Promise<Room | null> {
+	const rooms = await listRooms(env);
+	if (!rooms.some((r) => r.id === roomId)) return null;
+	if (photoId) {
+		const meta = await getPhotoMeta(env, photoId);
+		if (!meta?.parents?.includes(roomId)) return null;
+	}
+	const res = await driveFetch(env, `${DRIVE_API}/files/${encodeURIComponent(roomId)}?fields=id`, {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ appProperties: { cover: photoId } }),
+	});
+	if (!res.ok) throw new Error(`Drive portada fallo (${res.status})`);
+	cachedRooms = null;
+	return (await listRooms(env)).find((r) => r.id === roomId) ?? null;
 }
 
 export async function createRoom(env: Env, name: string): Promise<Room> {
@@ -365,5 +408,12 @@ export async function trashPhoto(env: Env, id: string): Promise<boolean> {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ trashed: true }),
 	});
+	if (res.ok) {
+		// Si era la portada de su sala, se limpia para que la sala vuelva a usar su primera foto.
+		const rooms = await listRooms(env);
+		const room = rooms.find((r) => meta.parents?.includes(r.id));
+		if (room?.cover === id) await setRoomCover(env, room.id, null).catch(() => undefined);
+		cachedRooms = null;
+	}
 	return res.ok;
 }
