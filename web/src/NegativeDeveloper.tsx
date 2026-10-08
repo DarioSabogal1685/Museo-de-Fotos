@@ -3,6 +3,7 @@ import { clearAdminToken, fetchRooms, getAdminToken, uploadPhoto, type Room } fr
 import Cropper, { fitCrop, type Crop } from './Cropper'
 import {
   analyzeLight,
+  applySpots,
   autoAdjust,
   cropCanvas,
   DEFAULT_ADJUST,
@@ -18,19 +19,24 @@ interface Props {
   onClose: () => void
 }
 
-type Stage = 'camera' | 'crop' | 'adjust'
+type Stage = 'camera' | 'edit'
 
 const LIGHT_MESSAGES: Record<LightState, string> = {
   dark: 'Muy oscuro: pon una pantalla blanca o una caja de luz detrás del negativo.',
   bright: 'Demasiada luz: baja el brillo de la pantalla o aleja un poco la cámara.',
   flat: 'No se distingue la imagen: acerca la cámara hasta ver bien el negativo.',
-  good: 'Luz correcta. Mantén quieto el celular y pulsa «Capturar».',
+  good: 'Luz correcta. Mantén quieto el celular y pulsa el botón redondo.',
 }
 
 export const MAX_SIDE = 3200
 export const PREVIEW_SIDE = 1000
 export const FULL_CROP: Crop = { x: 0, y: 0, w: 1, h: 1 }
-export const LOW_RES_WIDTH = 1200
+const LOW_RES_WIDTH = 1200
+
+/** Ancho del cuadro con el que se calcula la vista previa en vivo (pequeno para que sea fluido). */
+const LIVE_WIDTH = 480
+/** Mismos ajustes que al revelar, sin los filtros pesados (ruido, nitidez, polvo). */
+const LIVE_ADJUST: Adjust = { ...DEFAULT_ADJUST, noiseLuma: 0, noiseColor: 0, sharpness: 0, dust: 0 }
 
 export const RATIOS: { key: string; label: string; value: number | null }[] = [
   { key: 'free', label: 'Libre', value: null },
@@ -40,17 +46,29 @@ export const RATIOS: { key: string; label: string; value: number | null }[] = [
   { key: '16:9', label: '16:9', value: 16 / 9 },
 ]
 
-export const SLIDERS: { key: keyof Adjust; label: string; min: number; max: number; step: number }[] = [
-  { key: 'exposure', label: 'Brillo', min: -1, max: 1, step: 0.05 },
-  { key: 'contrast', label: 'Contraste', min: 0, max: 2, step: 0.05 },
-  { key: 'shadows', label: 'Sombras', min: -1, max: 1, step: 0.05 },
-  { key: 'highlights', label: 'Luces', min: -1, max: 1, step: 0.05 },
-  { key: 'warmth', label: 'Frío ↔ Cálido', min: -1, max: 1, step: 0.05 },
-  { key: 'saturation', label: 'Color', min: 0, max: 2, step: 0.05 },
-  { key: 'noiseLuma', label: 'Reducir ruido', min: 0, max: 1, step: 0.05 },
-  { key: 'noiseColor', label: 'Ruido de color', min: 0, max: 1, step: 0.05 },
-  { key: 'sharpness', label: 'Nitidez', min: 0, max: 1, step: 0.05 },
-  { key: 'dust', label: 'Quitar polvo y rayones', min: 0, max: 1, step: 0.05 },
+/** Herramientas de la fila deslizable, como en el editor de fotos del iPhone. */
+type Tool = keyof Adjust | 'crop' | 'retouch'
+
+interface SliderTool {
+  id: keyof Adjust
+  icon: string
+  label: string
+  min: number
+  max: number
+  step: number
+}
+
+const SLIDER_TOOLS: SliderTool[] = [
+  { id: 'exposure', icon: '☀️', label: 'Brillo', min: -1, max: 1, step: 0.02 },
+  { id: 'contrast', icon: '◐', label: 'Contraste', min: 0, max: 2, step: 0.02 },
+  { id: 'shadows', icon: '🌑', label: 'Sombras', min: -1, max: 1, step: 0.02 },
+  { id: 'highlights', icon: '🌕', label: 'Luces', min: -1, max: 1, step: 0.02 },
+  { id: 'warmth', icon: '🌡️', label: 'Calidez', min: -1, max: 1, step: 0.02 },
+  { id: 'saturation', icon: '🎨', label: 'Color', min: 0, max: 2, step: 0.02 },
+  { id: 'sharpness', icon: '🔺', label: 'Nitidez', min: 0, max: 1, step: 0.02 },
+  { id: 'noiseLuma', icon: '🌫️', label: 'Ruido', min: 0, max: 1, step: 0.02 },
+  { id: 'noiseColor', icon: '💧', label: 'Ruido color', min: 0, max: 1, step: 0.02 },
+  { id: 'dust', icon: '🧹', label: 'Polvo', min: 0, max: 1, step: 0.02 },
 ]
 
 interface ImageCaptureLike {
@@ -59,7 +77,9 @@ interface ImageCaptureLike {
 type ImageCaptureCtor = new (track: MediaStreamTrack) => ImageCaptureLike
 
 interface Captured {
+  /** Foto del negativo en alta resolucion (para el resultado final). */
   full: HTMLCanvasElement
+  /** Version reducida para que los ajustes respondan al instante. */
   preview: HTMLCanvasElement
 }
 
@@ -77,30 +97,43 @@ export const toBlob = (canvas: HTMLCanvasElement) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('No se pudo crear la imagen'))), 'image/jpeg', 0.93),
   )
 
+/** Valor mostrado como en el iPhone: 0 es el punto de partida y se mueve hacia + o -. */
+const displayValue = (tool: SliderTool, value: number) => {
+  const v = Math.round((value - DEFAULT_ADJUST[tool.id]) * 100)
+  return v > 0 ? `+${v}` : `${v}`
+}
+
 export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const livePreviewRef = useRef<HTMLCanvasElement>(null)
+  // Vista previa en vivo: se muestra la foto ya revelada antes de capturar.
+  const [liveOn, setLiveOn] = useState(true)
   const streamRef = useRef<MediaStream | null>(null)
   const [stage, setStage] = useState<Stage>('camera')
   const [light, setLight] = useState<LightState>('dark')
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
 
   const [captured, setCaptured] = useState<Captured | null>(null)
+  const [tool, setTool] = useState<Tool>('exposure')
+  const [adjust, setAdjust] = useState<Adjust>(DEFAULT_ADJUST)
+  const [developed, setDeveloped] = useState<HTMLCanvasElement | null>(null)
+
+  // Giro y recorte: siempre sobre la foto ya revelada.
   const [quarter, setQuarter] = useState(0)
   const [fine, setFine] = useState(0)
   const [ratioKey, setRatioKey] = useState('free')
   const [crop, setCrop] = useState<Crop>(FULL_CROP)
 
-  const [adjust, setAdjust] = useState<Adjust>(DEFAULT_ADJUST)
-  const [positiveUrl, setPositiveUrl] = useState<string | null>(null)
+  // Retoque manual de manchas.
   const [spots, setSpots] = useState<Spot[]>([])
-  const [retouch, setRetouch] = useState(false)
   const [brush, setBrush] = useState(0.012)
 
   const [rooms, setRooms] = useState<Room[]>([])
   const [roomId, setRoomId] = useState(defaultRoomId ?? '')
   const [saving, setSaving] = useState(false)
-  const [saveStatus, setSaveStatus] = useState<{ ok: boolean; text: string } | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const angle = quarter * 90 + fine
   const ratio = RATIOS.find((r) => r.key === ratioKey)?.value ?? null
@@ -170,13 +203,68 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     return () => window.clearInterval(id)
   }, [stage, cameraError])
 
-  // --- Geometria: rotacion y recorte ---
-  const rotatedPreview = useMemo(
-    () => (captured ? rotateCanvas(captured.preview, angle) : null),
-    [captured, angle],
+  // Vista previa en vivo: cada ~0,1 s se revela un cuadro pequeno de la camara y se dibuja en pantalla.
+  useEffect(() => {
+    if (stage !== 'camera' || cameraError || !liveOn || processing) return
+    let cancelled = false
+    let timer = 0
+    const scratch = document.createElement('canvas')
+    const tick = () => {
+      if (cancelled) return
+      const video = videoRef.current
+      const target = livePreviewRef.current
+      if (video && video.videoWidth && target) {
+        scratch.width = LIVE_WIDTH
+        scratch.height = Math.round((LIVE_WIDTH * video.videoHeight) / video.videoWidth)
+        scratch.getContext('2d', { willReadFrequently: true })?.drawImage(video, 0, 0, scratch.width, scratch.height)
+        try {
+          const result = developNegative(scratch, LIVE_ADJUST)
+          target.width = result.width
+          target.height = result.height
+          target.getContext('2d')?.drawImage(result, 0, 0)
+        } catch {
+          /* se intenta de nuevo con el siguiente cuadro */
+        }
+      }
+      // Se espera a terminar un cuadro antes de pedir el siguiente, para no atascar el telefono.
+      timer = window.setTimeout(tick, 100)
+    }
+    tick()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [stage, cameraError, liveOn, processing])
+
+  // El aviso de "foto guardada" desaparece solo.
+  useEffect(() => {
+    if (!toast) return
+    const id = window.setTimeout(() => setToast(null), 4000)
+    return () => window.clearTimeout(id)
+  }, [toast])
+
+  // --- Revelado: la foto aparece ya revelada y se vuelve a revelar al mover un ajuste ---
+  useEffect(() => {
+    if (!captured) {
+      setDeveloped(null)
+      return
+    }
+    const id = window.setTimeout(() => setDeveloped(developNegative(captured.preview, adjust)), 40)
+    return () => window.clearTimeout(id)
+  }, [captured, adjust])
+
+  // --- Giro y recorte sobre la foto revelada ---
+  const rotated = useMemo(() => (developed ? rotateCanvas(developed, angle) : null), [developed, angle])
+  const imgAspect = rotated ? rotated.width / rotated.height : 1
+  // Solo se genera la imagen del recorte cuando se esta usando, para no gastar en cada arrastre.
+  const rotatedUrl = useMemo(
+    () => (tool === 'crop' && rotated ? rotated.toDataURL('image/jpeg', 0.85) : null),
+    [tool, rotated],
   )
-  const rotatedUrl = useMemo(() => rotatedPreview?.toDataURL('image/jpeg', 0.85) ?? null, [rotatedPreview])
-  const imgAspect = rotatedPreview ? rotatedPreview.width / rotatedPreview.height : 1
+  const resultUrl = useMemo(
+    () => (tool !== 'crop' && rotated ? applySpots(cropCanvas(rotated, crop), spots).toDataURL('image/jpeg', 0.9) : null),
+    [tool, rotated, crop, spots],
+  )
 
   // Al girar 90 grados se reinicia el recorte.
   useEffect(() => {
@@ -190,44 +278,24 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratioKey, fine])
 
-  // Resolucion estimada del recorte final.
-  const cropPixels = useMemo(() => {
-    if (!captured || !rotatedPreview) return null
-    const scale = captured.full.width / captured.preview.width
-    return {
-      w: Math.round(crop.w * rotatedPreview.width * scale),
-      h: Math.round(crop.h * rotatedPreview.height * scale),
-    }
-  }, [captured, rotatedPreview, crop])
-
   // Los retoques manuales dependen del encuadre: si cambia, se descartan.
   useEffect(() => {
     setSpots([])
-    setRetouch(false)
   }, [crop, angle])
 
-  // --- Revelado (vista previa) ---
-  useEffect(() => {
-    if (stage !== 'adjust' || !rotatedPreview) return
-    const id = window.setTimeout(() => {
-      const cropped = cropCanvas(rotatedPreview, crop)
-      setPositiveUrl(developNegative(cropped, adjust, spots).toDataURL('image/jpeg', 0.9))
-    }, 40)
-    return () => window.clearTimeout(id)
-  }, [stage, rotatedPreview, crop, adjust, spots])
+  const cropPixels = useMemo(() => {
+    if (!captured || !rotated) return null
+    const scale = captured.full.width / captured.preview.width
+    return { w: Math.round(crop.w * rotated.width * scale), h: Math.round(crop.h * rotated.height * scale) }
+  }, [captured, rotated, crop])
 
   const finalCanvas = () => {
     if (!captured) throw new Error('No hay foto')
-    const rotated = rotateCanvas(captured.full, angle)
-    return developNegative(cropCanvas(rotated, crop), adjust, spots)
-  }
-
-  const runAutoAdjust = () => {
-    if (rotatedPreview) setAdjust(autoAdjust(cropCanvas(rotatedPreview, crop)))
+    return applySpots(cropCanvas(rotateCanvas(developNegative(captured.full, adjust), angle), crop), spots)
   }
 
   const addSpot = (e: React.MouseEvent<HTMLImageElement>) => {
-    if (!retouch) return
+    if (tool !== 'retouch') return
     const rect = e.currentTarget.getBoundingClientRect()
     setSpots((list) => [
       ...list,
@@ -235,9 +303,9 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     ])
   }
 
-  // Tamano del recorte revelado, para dibujar los marcadores de retoque a su escala.
-  const outW = rotatedPreview ? crop.w * rotatedPreview.width : 1
-  const outH = rotatedPreview ? crop.h * rotatedPreview.height : 1
+  // Tamano de la imagen recortada, para dibujar los marcadores de retoque a su escala.
+  const outW = rotated ? crop.w * rotated.width : 1
+  const outH = rotated ? crop.h * rotated.height : 1
   const outSide = Math.max(outW, outH)
 
   // --- Captura ---
@@ -255,10 +323,12 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
         setFine(0)
         setRatioKey('free')
         setCrop(FULL_CROP)
+        setSpots([])
         setAdjust(DEFAULT_ADJUST)
-        setSaveStatus(null)
+        setTool('exposure')
+        setSaveError(null)
         setCaptured({ full, preview: scaled(full, PREVIEW_SIDE) })
-        setStage('crop')
+        setStage('edit')
         stopCamera()
       } catch (e) {
         setCameraError((e as Error).message)
@@ -293,259 +363,254 @@ export default function NegativeDeveloper({ defaultRoomId, onClose }: Props) {
     process(bitmap, bitmap.width, bitmap.height)
   }
 
-  const retake = () => {
-    setCaptured(null)
-    setPositiveUrl(null)
-    setStage('camera')
-    startCamera()
-  }
-
-  // --- Salidas ---
-  const fileName = (prefix: string) => `${prefix}-${Date.now()}.jpg`
-
-  const download = async () => {
-    const blob = await toBlob(finalCanvas())
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName('foto-revelada')
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
+  // --- Guardar y pasar solo a la foto siguiente ---
   const save = async () => {
     if (!roomId) return
     const token = getAdminToken()
     if (!token) return
     setSaving(true)
-    setSaveStatus(null)
+    setSaveError(null)
     try {
       const blob = await toBlob(finalCanvas())
-      await uploadPhoto(roomId, new File([blob], fileName('negativo-revelado'), { type: 'image/jpeg' }), token)
+      await uploadPhoto(roomId, new File([blob], `negativo-revelado-${Date.now()}.jpg`, { type: 'image/jpeg' }), token)
       const roomName = rooms.find((r) => r.id === roomId)?.name ?? 'el cuarto'
-      setSaveStatus({ ok: true, text: `Foto guardada en «${roomName}».` })
+      setToast(`✓ Foto guardada en «${roomName}». Lista para la siguiente.`)
+      // Vuelve directo a la camara para tomar la siguiente foto.
+      setCaptured(null)
+      setStage('camera')
+      startCamera()
     } catch (e) {
       const message = (e as Error).message
       if (message === 'No autorizado') clearAdminToken()
-      setSaveStatus({ ok: false, text: message })
+      setSaveError(message)
     } finally {
       setSaving(false)
     }
   }
 
-  const shareWhatsApp = async () => {
-    setSaveStatus(null)
-    try {
-      const blob = await toBlob(finalCanvas())
-      const file = new File([blob], fileName('foto-revelada'), { type: 'image/jpeg' })
-      const text = 'Mira esta foto revelada en el Museo de Fotos'
-      if (navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], text })
-        return
-      }
-      // Sin compartir archivos: se descarga la foto y se abre WhatsApp para adjuntarla.
-      await download()
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
-      setSaveStatus({ ok: true, text: 'La foto se descargó. Adjúntala en la conversación de WhatsApp que se abrió.' })
-    } catch (e) {
-      if ((e as Error).name !== 'AbortError') setSaveStatus({ ok: false, text: (e as Error).message })
-    }
+  // --- Interfaz ---
+  if (stage === 'camera') {
+    return (
+      <div className="cam-full" role="dialog" aria-modal="true" aria-label="Revelar negativo">
+        <video ref={videoRef} className="cam-video" playsInline muted />
+        <canvas ref={livePreviewRef} className={`cam-video cam-live${liveOn ? '' : ' hidden'}`} />
+
+        <div className="cam-top">
+          <button className="cam-icon" aria-label="Cerrar" onClick={onClose}>✕</button>
+          <p className={cameraError ? 'cam-hint light-dark' : `cam-hint light-${light}`}>
+            {cameraError ?? LIGHT_MESSAGES[light]}
+          </p>
+        </div>
+
+        {toast && <div className="cam-toast">{toast}</div>}
+        {!cameraError && <div className="cam-badge">{liveOn ? 'Así quedará revelada' : 'Negativo sin revelar'}</div>}
+
+        <div className="cam-bottom">
+          <label className="cam-icon cam-file" aria-label="Elegir archivo" title="Elegir archivo">
+            🖼
+            <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+          </label>
+          <button
+            className="shutter"
+            aria-label="Capturar foto"
+            onClick={capture}
+            disabled={Boolean(cameraError) || processing}
+          />
+          <button
+            className={`cam-icon${liveOn ? ' cam-icon-on' : ''}`}
+            aria-label={liveOn ? 'Ver el negativo sin revelar' : 'Ver cómo quedará revelada'}
+            aria-pressed={liveOn}
+            title={liveOn ? 'Ver el negativo sin revelar' : 'Ver cómo quedará revelada'}
+            onClick={() => setLiveOn((v) => !v)}
+          >
+            👁
+          </button>
+        </div>
+
+        {processing && <div className="camera-overlay">Procesando…</div>}
+      </div>
+    )
   }
 
+  const sliderTool = SLIDER_TOOLS.find((t) => t.id === tool)
+  const isChanged = (t: SliderTool) => adjust[t.id] !== DEFAULT_ADJUST[t.id]
+
   return (
-    <div className={stage === 'camera' ? 'cam-full' : 'modal'} role="dialog" aria-modal="true" aria-label="Revelar negativo">
-      {stage !== 'camera' && (
-        <div className="modal-head">
-          <h2>Revelar negativo</h2>
-          <button className="btn" onClick={onClose}>Cerrar</button>
-        </div>
-      )}
+    <div className="editor" role="dialog" aria-modal="true" aria-label="Revelar negativo">
+      <div className="editor-head">
+        <button className="btn" onClick={onClose}>Cerrar</button>
+        <strong>Revelar negativo</strong>
+        <span className="editor-head-spacer" />
+      </div>
 
-      {stage === 'camera' && (
-        <>
-          <video ref={videoRef} className="cam-video" playsInline muted />
-
-          <div className="cam-top">
-            <button className="cam-icon" aria-label="Cerrar" onClick={onClose}>✕</button>
-            <p className={cameraError ? 'cam-hint light-dark' : `cam-hint light-${light}`}>
-              {cameraError ?? LIGHT_MESSAGES[light]}
-            </p>
-          </div>
-
-          <div className="cam-bottom">
-            <label className="cam-icon cam-file" aria-label="Elegir archivo" title="Elegir archivo">
-              🖼
-              <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
-            </label>
-            <button
-              className="shutter"
-              aria-label="Capturar foto"
-              onClick={capture}
-              disabled={Boolean(cameraError) || processing}
-            />
-            <span className="cam-spacer" />
-          </div>
-
-          {processing && <div className="camera-overlay">Procesando…</div>}
-        </>
-      )}
-
-      {stage === 'crop' && rotatedUrl && (
-        <div className="modal-body">
-          <p className="step-title">1. Recorta y endereza el negativo</p>
-
-          <div className="crop-stage">
-            <Cropper src={rotatedUrl} imgAspect={imgAspect} ratio={ratio} crop={crop} onChange={setCrop} />
-          </div>
-
-          <div className="adjust-box">
-            <div className="chips">
-              <button className="btn" onClick={() => setQuarter((q) => (q + 3) % 4)}>⟲ 90°</button>
-              <button className="btn" onClick={() => setQuarter((q) => (q + 1) % 4)}>⟳ 90°</button>
-              <button
-                className="btn"
-                onClick={() => {
-                  setQuarter(0)
-                  setFine(0)
-                  setRatioKey('free')
-                  setCrop(FULL_CROP)
-                }}
-              >
-                Restablecer
-              </button>
-            </div>
-
-            <label className="slider">
-              <span>Enderezar ({fine > 0 ? '+' : ''}{fine.toFixed(1)}°)</span>
-              <input type="range" min={-45} max={45} step={0.5} value={fine} onChange={(e) => setFine(Number(e.target.value))} />
-            </label>
-
-            <div className="chips">
-              {RATIOS.map((r) => (
-                <button
-                  key={r.key}
-                  className={`btn${ratioKey === r.key ? ' primary' : ''}`}
-                  onClick={() => setRatioKey(r.key)}
-                >
-                  {r.label}
-                </button>
+      <div className="editor-photo">
+        {tool === 'crop' && rotatedUrl ? (
+          <Cropper src={rotatedUrl} imgAspect={imgAspect} ratio={ratio} crop={crop} onChange={setCrop} />
+        ) : resultUrl ? (
+          <div className={`result-wrap${tool === 'retouch' ? ' retouching' : ''}`}>
+            <img src={resultUrl} alt="Foto revelada a color" onClick={addSpot} draggable={false} />
+            {tool === 'retouch' &&
+              spots.map((s, i) => (
+                <span
+                  key={i}
+                  className="spot-mark"
+                  style={{
+                    left: `${s.x * 100}%`,
+                    top: `${s.y * 100}%`,
+                    width: `${((2 * s.r * outSide) / outW) * 100}%`,
+                    height: `${((2 * s.r * outSide) / outH) * 100}%`,
+                  }}
+                />
               ))}
-            </div>
           </div>
+        ) : (
+          <div className="compare-wait">Revelando…</div>
+        )}
+      </div>
 
-          {cropPixels && (
-            <p className={cropPixels.w < LOW_RES_WIDTH ? 'light-hint light-flat' : 'hint'}>
-              Resolución del recorte: {cropPixels.w} × {cropPixels.h} px
-              {cropPixels.w < LOW_RES_WIDTH && ' — baja: acerca más la cámara al negativo para ganar nitidez.'}
-            </p>
+      <div className="editor-controls">
+        {/* Barra de la herramienta elegida */}
+        <div className="tool-panel">
+          {sliderTool && (
+            <>
+              <div className="tool-panel-head">
+                <span>{sliderTool.label}</span>
+                <strong>{displayValue(sliderTool, adjust[sliderTool.id])}</strong>
+                <button
+                  className="link-btn"
+                  disabled={!isChanged(sliderTool)}
+                  onClick={() => setAdjust((a) => ({ ...a, [sliderTool.id]: DEFAULT_ADJUST[sliderTool.id] }))}
+                >
+                  Restablecer
+                </button>
+              </div>
+              <input
+                type="range"
+                className="tool-slider"
+                min={sliderTool.min}
+                max={sliderTool.max}
+                step={sliderTool.step}
+                value={adjust[sliderTool.id]}
+                onChange={(e) => setAdjust((a) => ({ ...a, [sliderTool.id]: Number(e.target.value) }))}
+              />
+            </>
           )}
 
-          <div className="modal-actions">
-            <button className="btn" onClick={retake}>Tomar otra</button>
-            <button className="btn primary" onClick={() => setStage('adjust')}>Revelar →</button>
-          </div>
-        </div>
-      )}
-
-      {stage === 'adjust' && (
-        <div className="modal-body">
-          <p className="step-title">2. Ajusta la foto revelada</p>
-
-          <div className="result-stage">
-            {positiveUrl ? (
-              <div className={`result-wrap${retouch ? ' retouching' : ''}`}>
-                <img src={positiveUrl} alt="Foto revelada a color" onClick={addSpot} draggable={false} />
-                {retouch &&
-                  spots.map((s, i) => (
-                    <span
-                      key={i}
-                      className="spot-mark"
-                      style={{
-                        left: `${s.x * 100}%`,
-                        top: `${s.y * 100}%`,
-                        width: `${((2 * s.r * outSide) / outW) * 100}%`,
-                        height: `${((2 * s.r * outSide) / outH) * 100}%`,
-                      }}
-                    />
-                  ))}
-              </div>
-            ) : (
-              <div className="compare-wait">Revelando…</div>
-            )}
-          </div>
-
-          <div className="adjust-box">
-            <div className="chips">
-              <button className="btn primary" onClick={runAutoAdjust}>✨ Automejora</button>
-              <button className={`btn${retouch ? ' primary' : ''}`} onClick={() => setRetouch((v) => !v)}>
-                {retouch ? 'Terminar retoque' : 'Retocar manchas'}
-              </button>
-            </div>
-
-            {retouch && (
-              <>
-                <p className="hint">Toca cada mancha o rayón de la foto para borrarlo.</p>
-                <label className="slider">
-                  <span>Tamaño del pincel</span>
-                  <input type="range" min={0.004} max={0.04} step={0.002} value={brush} onChange={(e) => setBrush(Number(e.target.value))} />
-                </label>
-                <div className="chips">
-                  <button className="btn" disabled={spots.length === 0} onClick={() => setSpots((l) => l.slice(0, -1))}>Deshacer</button>
-                  <button className="btn" disabled={spots.length === 0} onClick={() => setSpots([])}>
-                    Quitar todos los retoques ({spots.length})
+          {tool === 'crop' && (
+            <div className="crop-panel">
+              <div className="chips">
+                <button className="btn" onClick={() => setQuarter((q) => (q + 3) % 4)}>⟲ 90°</button>
+                <button className="btn" onClick={() => setQuarter((q) => (q + 1) % 4)}>⟳ 90°</button>
+                {RATIOS.map((r) => (
+                  <button key={r.key} className={`btn${ratioKey === r.key ? ' primary' : ''}`} onClick={() => setRatioKey(r.key)}>
+                    {r.label}
                   </button>
-                </div>
-              </>
-            )}
-
-            {SLIDERS.map((s) => (
-              <label key={s.key} className="slider">
-                <span>{s.label}</span>
-                <input
-                  type="range"
-                  min={s.min}
-                  max={s.max}
-                  step={s.step}
-                  value={adjust[s.key]}
-                  onChange={(e) => setAdjust((a) => ({ ...a, [s.key]: Number(e.target.value) }))}
-                />
+                ))}
+                <button
+                  className="link-btn"
+                  onClick={() => {
+                    setQuarter(0)
+                    setFine(0)
+                    setRatioKey('free')
+                    setCrop(FULL_CROP)
+                  }}
+                >
+                  Restablecer
+                </button>
+              </div>
+              <label className="slider">
+                <span>Enderezar ({fine > 0 ? '+' : ''}{fine.toFixed(1)}°)</span>
+                <input type="range" min={-45} max={45} step={0.5} value={fine} onChange={(e) => setFine(Number(e.target.value))} />
               </label>
-            ))}
-            <button className="btn" onClick={() => setAdjust(DEFAULT_ADJUST)}>Restablecer ajustes</button>
-          </div>
+              {cropPixels && (
+                <p className={cropPixels.w < LOW_RES_WIDTH ? 'light-hint light-flat' : 'hint'}>
+                  Resolución: {cropPixels.w} × {cropPixels.h} px
+                  {cropPixels.w < LOW_RES_WIDTH && ' — baja: acerca más la cámara al negativo.'}
+                </p>
+              )}
+            </div>
+          )}
 
-          <div className="save-box">
-            <label htmlFor="room-select">¿En qué cuarto la quieres guardar?</label>
-            <select
-              id="room-select"
-              value={roomId}
-              onChange={(e) => {
-                setRoomId(e.target.value)
-                setSaveStatus(null)
-              }}
-              disabled={saving || rooms.length === 0}
-            >
-              {rooms.length === 0 && <option value="">No hay cuartos disponibles</option>}
-              {rooms.map((r) => (
-                <option key={r.id} value={r.id}>{r.name}</option>
-              ))}
-            </select>
-            <button className="btn primary" onClick={save} disabled={saving || !roomId || saveStatus?.ok}>
-              {saving ? 'Guardando…' : 'Guardar en Drive'}
-            </button>
-            <button className="btn whatsapp" onClick={shareWhatsApp}>Enviar por WhatsApp</button>
-            {saveStatus && (
-              <p className={saveStatus.ok ? 'light-hint light-good' : 'message error'}>{saveStatus.text}</p>
-            )}
-          </div>
-
-          <div className="modal-actions">
-            <button className="btn" onClick={() => setStage('crop')}>← Recortar</button>
-            <button className="btn" onClick={download}>Descargar foto</button>
-            <button className="btn" onClick={retake}>Tomar otra</button>
-          </div>
+          {tool === 'retouch' && (
+            <div className="crop-panel">
+              <p className="hint">Toca cada mancha o rayón de la foto para borrarlo.</p>
+              <label className="slider">
+                <span>Tamaño del pincel</span>
+                <input type="range" min={0.004} max={0.04} step={0.002} value={brush} onChange={(e) => setBrush(Number(e.target.value))} />
+              </label>
+              <div className="chips">
+                <button className="btn" disabled={spots.length === 0} onClick={() => setSpots((l) => l.slice(0, -1))}>Deshacer</button>
+                <button className="btn" disabled={spots.length === 0} onClick={() => setSpots([])}>
+                  Quitar todos ({spots.length})
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Fila de herramientas: se desliza de lado a lado; al tocar una, se abre su barra */}
+        <div className="tool-row" role="tablist" aria-label="Herramientas">
+          <button
+            className="tool"
+            onClick={() => captured && setAdjust(autoAdjust(captured.preview))}
+          >
+            <span className="tool-icon">✨</span>
+            <span>Auto</span>
+          </button>
+          <button
+            className={`tool${tool === 'crop' ? ' active' : ''}${angle !== 0 || crop !== FULL_CROP ? ' changed' : ''}`}
+            role="tab"
+            aria-selected={tool === 'crop'}
+            onClick={() => setTool('crop')}
+          >
+            <span className="tool-icon">✂️</span>
+            <span>Recortar</span>
+          </button>
+          {SLIDER_TOOLS.map((t) => (
+            <button
+              key={t.id}
+              className={`tool${tool === t.id ? ' active' : ''}${isChanged(t) ? ' changed' : ''}`}
+              role="tab"
+              aria-selected={tool === t.id}
+              onClick={() => setTool(t.id)}
+            >
+              <span className="tool-icon">{t.icon}</span>
+              <span>{t.label}</span>
+            </button>
+          ))}
+          <button
+            className={`tool${tool === 'retouch' ? ' active' : ''}${spots.length > 0 ? ' changed' : ''}`}
+            role="tab"
+            aria-selected={tool === 'retouch'}
+            onClick={() => setTool('retouch')}
+          >
+            <span className="tool-icon">🩹</span>
+            <span>Retocar</span>
+          </button>
+        </div>
+
+        {/* Guardar en el cuarto elegido */}
+        <div className="save-line">
+          <select
+            aria-label="Cuarto donde guardar"
+            value={roomId}
+            onChange={(e) => {
+              setRoomId(e.target.value)
+              setSaveError(null)
+            }}
+            disabled={saving || rooms.length === 0}
+          >
+            {rooms.length === 0 && <option value="">No hay cuartos</option>}
+            {rooms.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={save} disabled={saving || !roomId || !developed}>
+            {saving ? 'Guardando…' : 'Guardar en Drive'}
+          </button>
+        </div>
+        {saveError && <p className="message error save-error">{saveError}</p>}
+      </div>
     </div>
   )
 }

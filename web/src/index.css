@@ -299,3 +299,68 @@ button.menu-update:hover { background: #e2bd4a; }
 .fail-list { margin: 0; padding-left: 1.2rem; color: #ff7b72; font-size: .9rem; line-height: 1.5; }
 .fail-list strong { color: var(--fg); }
 @media (max-width: 600px) { .header .actions, .toolbar .actions { flex-wrap: wrap; justify-content: flex-end; } }
+
+/* --- Editor de la foto revelada (estilo iPhone) --- */
+.editor { position: fixed; inset: 0; z-index: 50; background: #0d0b0a; display: flex; flex-direction: column; }
+.editor-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: max(.5rem, env(safe-area-inset-top)) .75rem .5rem; border-bottom: 1px solid #2a2a2a;
+}
+.editor-head-spacer { width: 4.5rem; }
+.editor-photo { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: .5rem; overflow: hidden; }
+.editor-photo .result-wrap img { max-width: 100%; max-height: calc(100dvh - 22rem); object-fit: contain; display: block; }
+.editor-photo .cropper img { max-width: 100%; max-height: calc(100dvh - 22rem); }
+.editor-controls { flex: none; border-top: 1px solid #2a2a2a; background: #14110f; padding-bottom: max(.5rem, env(safe-area-inset-bottom)); }
+
+.tool-panel { min-height: 5.5rem; padding: .6rem 1rem .2rem; }
+.tool-panel-head { display: flex; align-items: baseline; gap: .75rem; font-size: .9rem; color: var(--muted); }
+.tool-panel-head strong { color: var(--accent); font-size: 1rem; min-width: 2.5rem; }
+.tool-panel-head .link-btn { margin-left: auto; }
+.tool-slider { width: 100%; accent-color: var(--accent); height: 2.2rem; }
+.crop-panel { display: flex; flex-direction: column; gap: .5rem; }
+.link-btn { background: none; border: 0; color: var(--accent); font: inherit; font-size: .85rem; cursor: pointer; padding: 0 .25rem; }
+.link-btn:disabled { color: var(--muted); opacity: .5; cursor: default; }
+
+.tool-row {
+  display: flex; gap: .4rem; overflow-x: auto; padding: .4rem .75rem .6rem; scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.tool-row::-webkit-scrollbar { display: none; }
+.tool {
+  flex: none; width: 66px; scroll-snap-align: start; background: none; border: 0; color: var(--muted); cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: .3rem; font: inherit; font-size: .7rem;
+}
+.tool.active { color: var(--fg); }
+.tool-icon {
+  position: relative; width: 48px; height: 48px; border-radius: 50%; background: #2a2420; border: 2px solid transparent;
+  display: grid; place-items: center; font-size: 1.3rem; transition: border-color .15s;
+}
+.tool.active .tool-icon { border-color: var(--accent); }
+.tool.changed .tool-icon::after {
+  content: ''; position: absolute; top: 1px; right: 1px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); border: 2px solid #14110f;
+}
+
+.save-line { display: flex; gap: .5rem; padding: 0 .75rem; }
+.save-line select {
+  flex: 1; min-width: 0; background: #2a2420; color: var(--fg); border: 1px solid #4a3f36; border-radius: 6px;
+  padding: .6rem .7rem; font: inherit;
+}
+.save-line .btn { padding: .6rem 1rem; white-space: nowrap; }
+.save-error { padding: .4rem .75rem 0; margin: 0; }
+
+.cam-toast {
+  position: absolute; left: 50%; top: 4.5rem; transform: translateX(-50%); z-index: 4; max-width: 90vw;
+  background: #166534; color: #fff; padding: .6rem 1rem; border-radius: 999px; font-weight: 600; font-size: .9rem;
+  box-shadow: 0 4px 16px #0008; text-align: center;
+}
+
+/* --- Vista previa en vivo de la foto revelada --- */
+.cam-live { z-index: 1; }
+.cam-live.hidden { display: none; }
+.cam-top, .cam-bottom { z-index: 2; }
+.cam-icon-on { background: var(--accent); color: #111; }
+.cam-badge {
+  position: absolute; left: 50%; bottom: 7.8rem; transform: translateX(-50%); z-index: 2; pointer-events: none;
+  background: #000a; color: #fff; font-size: .75rem; padding: .25rem .7rem; border-radius: 999px; white-space: nowrap;
+}

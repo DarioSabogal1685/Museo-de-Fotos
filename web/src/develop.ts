@@ -558,3 +558,18 @@ export function autoAdjust(source: HTMLCanvasElement, positive = false): Adjust 
     dust: 0.4,
   }
 }
+
+/** Aplica los retoques manuales (manchas) a una imagen ya revelada y recortada. */
+export function applySpots(source: HTMLCanvasElement, spots: Spot[]): HTMLCanvasElement {
+  if (spots.length === 0) return source
+  const out = document.createElement('canvas')
+  out.width = source.width
+  out.height = source.height
+  const ctx = out.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('No se pudo retocar la imagen')
+  ctx.drawImage(source, 0, 0)
+  const image = ctx.getImageData(0, 0, out.width, out.height)
+  healSpots(image.data, out.width, out.height, spots)
+  ctx.putImageData(image, 0, 0)
+  return out
+}
