@@ -267,3 +267,26 @@ button.menu-update:hover { background: #e2bd4a; }
 .info-people { margin: 0; padding-left: 1.3rem; }
 .group-chip { display: inline-flex; gap: .25rem; }
 .group-chip .btn { padding: .45rem .7rem; }
+
+/* --- Grupos de fotos (negativos) --- */
+.filter-bar { display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem 1.5rem 0; }
+.chip {
+  background: #2a2420; color: var(--fg); border: 1px solid #4a3f36; border-radius: 999px;
+  padding: .35rem .85rem; font: inherit; font-size: .85rem; cursor: pointer;
+}
+.chip.active { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+.card.picked { outline: 3px solid var(--accent); outline-offset: -3px; }
+.card-check {
+  position: absolute; top: .4rem; right: .4rem; width: 26px; height: 26px; border-radius: 50%;
+  background: #000a; border: 2px solid #fff; color: #111; font-weight: 700; display: grid; place-items: center;
+}
+.card.picked .card-check { background: var(--accent); border-color: var(--accent); }
+.grid.with-bar { padding-bottom: 9rem; }
+.select-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; flex-direction: column; gap: .5rem;
+  padding: .75rem 1rem max(.75rem, env(safe-area-inset-bottom)); background: #1a1613; border-top: 1px solid #3a302a;
+}
+.select-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.select-row .text-input { flex: 1; min-width: 180px; width: auto; }
+.select-row span { color: var(--muted); font-size: .9rem; margin-right: auto; }
+@media (max-width: 600px) { .filter-bar { padding: .75rem .75rem 0; } }

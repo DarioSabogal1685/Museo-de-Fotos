@@ -14,18 +14,15 @@ export interface PhotoTags {
   place?: string
   /** Siempre ordenadas de izquierda a derecha. */
   people: PersonTag[]
-  /** Grupos aplicados a esta foto. */
-  groups?: string[]
-}
-
-export interface Group {
-  name: string
-  members: string[]
+  /** Grupo de fotos al que pertenece; su nombre es el nombre del negativo. */
+  group?: string
 }
 
 export interface TagSuggestions {
   people: string[]
   places: string[]
+  /** Nombres de grupo (de negativo) ya usados. */
+  groups: string[]
 }
 
 export interface Photo {
@@ -130,30 +127,19 @@ export function updatePhotoMeta(id: string, changes: { name?: string; tags?: Pho
   })
 }
 
-export const fetchGroups = (): Promise<Group[]> =>
-  DEMO
-    ? Promise.resolve([{ name: 'Familia', members: ['Ana', 'Luis', 'María'] }])
-    : request<Group[]>('/api/groups')
-
-/** Guarda la lista completa de grupos. */
-export function saveGroups(groups: Group[], token: string) {
-  if (DEMO) return demoOnly()
-  return request<Group[]>('/api/groups', {
-    method: 'PUT',
-    headers: { ...auth(token), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ groups }),
-  })
-}
-
 /** Personas ordenadas de izquierda a derecha; las que no tienen punto van al final. */
 export function sortLeftToRight<T extends { x?: number }>(people: T[]): T[] {
   return [...people].sort((a, b) => (a.x ?? Infinity) - (b.x ?? Infinity))
 }
 
-/** Nombres y lugares ya guardados, para el texto predictivo. */
+/** Nombres, lugares y grupos ya guardados, para el texto predictivo. */
 export const fetchTagSuggestions = (): Promise<TagSuggestions> =>
   DEMO
-    ? Promise.resolve({ people: ['Ana', 'Luis', 'María'], places: ['Casa', 'Playa', 'Bogotá'] })
+    ? Promise.resolve({
+        people: ['Ana', 'Luis', 'María'],
+        places: ['Casa', 'Playa', 'Bogotá'],
+        groups: ['Negativo 1', 'Negativo 2'],
+      })
     : request<TagSuggestions>('/api/tags')
 
 /** Reemplaza la imagen de una foto existente (y opcionalmente su nombre). */

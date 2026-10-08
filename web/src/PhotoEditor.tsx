@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   clearAdminToken,
-  fetchGroups,
   fetchTagSuggestions,
   getAdminToken,
   photoUrl,
-  saveGroups,
   sortLeftToRight,
   updatePhotoMeta,
-  type Group,
   type Photo,
   type PhotoTags,
   type TagSuggestions,
@@ -37,20 +34,17 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
     (photo.tags?.people ?? []).map((p) => ({ ...p, id: newId() })),
   )
   const [place, setPlace] = useState(photo.tags?.place ?? '')
-  const [photoGroups, setPhotoGroups] = useState<string[]>(photo.tags?.groups ?? [])
+  const [group, setGroup] = useState(photo.tags?.group ?? '')
   const [savedTags, setSavedTags] = useState<PhotoTags>(photo.tags ?? { people: [] })
 
   const [tagMode, setTagMode] = useState(false)
-  const [suggestions, setSuggestions] = useState<TagSuggestions>({ people: [], places: [] })
-  const [allGroups, setAllGroups] = useState<Group[]>([])
-  const [groupName, setGroupName] = useState('')
+  const [suggestions, setSuggestions] = useState<TagSuggestions>({ people: [], places: [], groups: [] })
 
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
     fetchTagSuggestions().then(setSuggestions).catch(() => undefined)
-    fetchGroups().then(setAllGroups).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -76,12 +70,10 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
       )
     const tags: PhotoTags = { people: named }
     if (place.trim()) tags.place = place.trim()
-    if (photoGroups.length > 0) tags.groups = photoGroups
+    if (group.trim()) tags.group = group.trim()
     return tags
   }
   const tagsChanged = JSON.stringify(currentTags()) !== JSON.stringify(savedTags)
-
-  const unplaced = people.find((p) => p.x === undefined)
 
   const onPhotoClick = (e: React.MouseEvent<HTMLImageElement>) => {
     if (!tagMode) return
@@ -89,41 +81,31 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
     setStatus(null)
-    // Si hay una persona esperando su punto (por ejemplo, de un grupo), el toque es para ella.
-    if (unplaced) {
-      setPeople((list) => list.map((p) => (p.id === unplaced.id ? { ...p, x, y } : p)))
+    // Si hay una persona agregada sin punto, el toque es para ella.
+    const waiting = people.find((p) => p.x === undefined)
+    if (waiting) {
+      setPeople((list) => list.map((p) => (p.id === waiting.id ? { ...p, x, y } : p)))
     } else {
       setPeople((list) => [...list, { id: newId(), name: '', x, y }])
     }
   }
 
+  const waiting = people.find((p) => p.x === undefined)
   const peopleOptions = [...new Set([...suggestions.people, ...people.map((p) => p.name.trim()).filter(Boolean)])]
   const placeOptions = [...new Set([...suggestions.places, place.trim()].filter(Boolean))]
+  const groupOptions = [...new Set([...suggestions.groups, group.trim()].filter(Boolean))]
 
-  // --- Grupos ---
-  const toggleGroup = (group: Group) => {
-    setStatus(null)
-    if (photoGroups.includes(group.name)) {
-      setPhotoGroups((g) => g.filter((n) => n !== group.name))
-      return
-    }
-    setPhotoGroups((g) => [...g, group.name])
-    // Se agregan los integrantes que todavia no estan; esperan su punto en la foto.
-    const have = new Set(people.map((p) => p.name.trim().toLowerCase()))
-    const missing = group.members.filter((m) => !have.has(m.toLowerCase()))
-    if (missing.length > 0) {
-      setPeople((list) => [...list, ...missing.map((name) => ({ id: newId(), name }))])
-      setTagMode(true)
-    }
-  }
-
-  const run = async (action: (token: string) => Promise<string>) => {
+  const save = async () => {
     const token = getAdminToken()
     if (!token) return
     setSaving(true)
     setStatus(null)
     try {
-      setStatus({ ok: true, text: await action(token) })
+      const tags = currentTags()
+      const updated = await updatePhotoMeta(photo.id, { tags }, token)
+      setSavedTags(tags)
+      onUpdated(updated)
+      setStatus({ ok: true, text: 'Información guardada.' })
     } catch (e) {
       const message = (e as Error).message
       if (message === 'No autorizado') clearAdminToken()
@@ -132,42 +114,6 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
       setSaving(false)
     }
   }
-
-  const buildGroup = () =>
-    run(async (token) => {
-      const name = groupName.trim()
-      const members = currentTags().people.map((p) => p.name)
-      if (!name) throw new Error('Escribe un nombre para el grupo')
-      if (members.length === 0) throw new Error('Marca al menos una persona con nombre para armar el grupo')
-      const exists = allGroups.some((g) => g.name.toLowerCase() === name.toLowerCase())
-      if (exists && !window.confirm(`Ya existe el grupo «${name}». ¿Reemplazar sus integrantes?`)) {
-        return 'No se cambió el grupo.'
-      }
-      const others = allGroups.filter((g) => g.name.toLowerCase() !== name.toLowerCase())
-      setAllGroups(await saveGroups([...others, { name, members }], token))
-      setPhotoGroups((g) => (g.includes(name) ? g : [...g, name]))
-      setGroupName('')
-      return `Grupo «${name}» guardado con ${members.length} persona${members.length === 1 ? '' : 's'}.`
-    })
-
-  const removeGroup = (group: Group) =>
-    run(async (token) => {
-      if (!window.confirm(`¿Eliminar el grupo «${group.name}»? Las fotos conservan sus personas.`)) {
-        return 'No se eliminó el grupo.'
-      }
-      setAllGroups(await saveGroups(allGroups.filter((g) => g.name !== group.name), token))
-      setPhotoGroups((g) => g.filter((n) => n !== group.name))
-      return `Grupo «${group.name}» eliminado.`
-    })
-
-  const save = () =>
-    run(async (token) => {
-      const tags = currentTags()
-      const updated = await updatePhotoMeta(photo.id, { tags }, token)
-      setSavedTags(tags)
-      onUpdated(updated)
-      return 'Información guardada.'
-    })
 
   return (
     <div className="modal" role="dialog" aria-modal="true" aria-label="Editar información de la foto">
@@ -191,6 +137,25 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
         </div>
 
         <div className="save-box">
+          <label htmlFor="photo-group">Grupo (nombre del negativo)</label>
+          <input
+            id="photo-group"
+            className="text-input"
+            list="groups-list"
+            value={group}
+            maxLength={80}
+            placeholder="Por ejemplo: Negativo Navidad 1998"
+            autoComplete="off"
+            onChange={(e) => {
+              setGroup(e.target.value)
+              setStatus(null)
+            }}
+          />
+          <datalist id="groups-list">
+            {groupOptions.map((g) => <option key={g} value={g} />)}
+          </datalist>
+          <p className="hint">Las fotos con el mismo grupo vienen del mismo negativo. Para agrupar varias a la vez, usa «Armar grupo» en el cuarto.</p>
+
           <label htmlFor="photo-place">Lugar</label>
           <input
             id="photo-place"
@@ -228,8 +193,8 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
           </div>
           {tagMode && (
             <p className="hint">
-              {unplaced
-                ? `Toca la foto para ubicar a «${unplaced.name.trim() || 'la persona nueva'}».`
+              {waiting
+                ? `Toca la foto para ubicar a «${waiting.name.trim() || 'la persona nueva'}».`
                 : 'Toca la foto sobre cada persona y escribe su nombre. Se ordenan solas de izquierda a derecha.'}
             </p>
           )}
@@ -263,43 +228,6 @@ export default function PhotoEditor({ photo, onClose, onUpdated }: Props) {
           <datalist id="people-list">
             {peopleOptions.map((n) => <option key={n} value={n} />)}
           </datalist>
-        </div>
-
-        <div className="save-box">
-          <label>Grupos</label>
-          {allGroups.length === 0 && <p className="hint">Todavía no hay grupos. Arma el primero abajo.</p>}
-          <div className="chips">
-            {allGroups.map((g) => (
-              <span key={g.name} className="group-chip">
-                <button
-                  className={`btn${photoGroups.includes(g.name) ? ' primary' : ''}`}
-                  title={g.members.join(', ')}
-                  onClick={() => toggleGroup(g)}
-                >
-                  {g.name} ({g.members.length})
-                </button>
-                <button className="btn" aria-label={`Eliminar grupo ${g.name}`} disabled={saving} onClick={() => removeGroup(g)}>✕</button>
-              </span>
-            ))}
-          </div>
-          <p className="hint">Toca un grupo para añadir sus integrantes a esta foto.</p>
-
-          <div className="person-row">
-            <input
-              className="text-input"
-              list="groups-list"
-              value={groupName}
-              maxLength={60}
-              placeholder="Nombre del nuevo grupo, por ejemplo Familia"
-              autoComplete="off"
-              onChange={(e) => setGroupName(e.target.value)}
-            />
-            <datalist id="groups-list">
-              {allGroups.map((g) => <option key={g.name} value={g.name} />)}
-            </datalist>
-            <button className="btn" disabled={saving || !groupName.trim()} onClick={buildGroup}>Armar grupo</button>
-          </div>
-          <p className="hint">«Armar grupo» guarda las personas de esta foto con ese nombre, para usarlas en otras fotos.</p>
         </div>
 
         <div className="save-box">

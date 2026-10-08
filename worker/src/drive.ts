@@ -25,13 +25,8 @@ export interface PhotoTags {
 	place?: string;
 	/** Siempre ordenadas de izquierda a derecha segun su punto. */
 	people: PersonTag[];
-	/** Nombres de los grupos aplicados a esta foto. */
-	groups?: string[];
-}
-
-export interface Group {
-	name: string;
-	members: string[];
+	/** Grupo de fotos al que pertenece; su nombre es el nombre del negativo. */
+	group?: string;
 }
 
 const TAGS_PREFIX = "museo:";
@@ -40,7 +35,7 @@ const MAX_PEOPLE = 60;
 /** Valida y limpia etiquetas recibidas (o leidas de Drive); devuelve null si no tienen forma valida. */
 export function sanitizeTags(input: unknown): PhotoTags | null {
 	if (typeof input !== "object" || input === null) return null;
-	const raw = input as { place?: unknown; people?: unknown; groups?: unknown };
+	const raw = input as { place?: unknown; people?: unknown; group?: unknown };
 	const people: PersonTag[] = [];
 	if (Array.isArray(raw.people)) {
 		for (const p of raw.people.slice(0, MAX_PEOPLE)) {
@@ -59,33 +54,13 @@ export function sanitizeTags(input: unknown): PhotoTags | null {
 	// Orden de izquierda a derecha; las personas sin punto quedan al final (el orden es estable).
 	people.sort((a, b) => (a.x ?? Infinity) - (b.x ?? Infinity));
 
-	const groups = Array.isArray(raw.groups)
-		? [...new Set(raw.groups.filter((g): g is string => typeof g === "string").map((g) => g.trim().slice(0, 60)).filter(Boolean))].slice(0, 20)
-		: [];
 	const place = typeof raw.place === "string" ? raw.place.trim().slice(0, 100) : "";
+	const group = typeof raw.group === "string" ? raw.group.trim().slice(0, 80) : "";
 
 	const tags: PhotoTags = { people };
 	if (place) tags.place = place;
-	if (groups.length > 0) tags.groups = groups;
+	if (group) tags.group = group;
 	return tags;
-}
-
-/** Valida la lista de grupos recibida. */
-export function sanitizeGroups(input: unknown): Group[] | null {
-	if (!Array.isArray(input)) return null;
-	const seen = new Set<string>();
-	const groups: Group[] = [];
-	for (const g of input.slice(0, 60)) {
-		const item = g as { name?: unknown; members?: unknown };
-		const name = typeof item?.name === "string" ? item.name.trim().slice(0, 60) : "";
-		if (!name || seen.has(name.toLowerCase())) continue;
-		seen.add(name.toLowerCase());
-		const members = Array.isArray(item.members)
-			? [...new Set(item.members.filter((m): m is string => typeof m === "string").map((m) => m.trim().slice(0, 60)).filter(Boolean))].slice(0, MAX_PEOPLE)
-			: [];
-		groups.push({ name, members });
-	}
-	return groups;
 }
 
 function parseTags(description?: string): PhotoTags | undefined {
@@ -317,14 +292,17 @@ let cachedSuggestions: { value: TagSuggestions; expiresAt: number } | null = nul
 export interface TagSuggestions {
 	people: string[];
 	places: string[];
+	/** Nombres de grupo (de negativo) ya usados. */
+	groups: string[];
 }
 
-/** Nombres y lugares ya guardados en todas las fotos, de mas a menos usados. */
+/** Nombres, lugares y grupos ya guardados en todas las fotos, de mas a menos usados. */
 export async function listTagSuggestions(env: Env): Promise<TagSuggestions> {
 	if (cachedSuggestions && cachedSuggestions.expiresAt > Date.now()) return cachedSuggestions.value;
 	const rooms = await listRooms(env);
 	const people = new Map<string, number>();
 	const places = new Map<string, number>();
+	const groups = new Map<string, number>();
 
 	if (rooms.length > 0) {
 		const parents = rooms.map((r) => `'${r.id}' in parents`).join(" or ");
@@ -343,6 +321,7 @@ export async function listTagSuggestions(env: Env): Promise<TagSuggestions> {
 				const tags = parseTags(f.description);
 				if (!tags) continue;
 				if (tags.place) places.set(tags.place, (places.get(tags.place) ?? 0) + 1);
+				if (tags.group) groups.set(tags.group, (groups.get(tags.group) ?? 0) + 1);
 				for (const p of tags.people) people.set(p.name, (people.get(p.name) ?? 0) + 1);
 			}
 			pageToken = data.nextPageToken;
@@ -350,7 +329,7 @@ export async function listTagSuggestions(env: Env): Promise<TagSuggestions> {
 	}
 
 	const sorted = (m: Map<string, number>) => [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
-	const value = { people: sorted(people), places: sorted(places) };
+	const value = { people: sorted(people), places: sorted(places), groups: sorted(groups) };
 	cachedSuggestions = { value, expiresAt: Date.now() + 60_000 };
 	return value;
 }
@@ -379,57 +358,4 @@ export async function trashPhoto(env: Env, id: string): Promise<boolean> {
 		body: JSON.stringify({ trashed: true }),
 	});
 	return res.ok;
-}
-
-// --- Grupos de personas: un archivo JSON en la carpeta principal del museo ---
-const GROUPS_FILE = "museo-grupos.json";
-let cachedGroups: { groups: Group[]; expiresAt: number } | null = null;
-
-async function findGroupsFileId(env: Env): Promise<string | null> {
-	const params = new URLSearchParams({
-		q: `name = '${GROUPS_FILE}' and '${env.DRIVE_FOLDER_ID}' in parents and trashed = false`,
-		fields: "files(id)",
-		pageSize: "1",
-	});
-	const res = await driveFetch(env, `${DRIVE_API}/files?${params}`);
-	if (!res.ok) throw new Error(`Drive buscar grupos fallo (${res.status})`);
-	const data = (await res.json()) as { files: { id: string }[] };
-	return data.files[0]?.id ?? null;
-}
-
-export async function getGroups(env: Env): Promise<Group[]> {
-	if (cachedGroups && cachedGroups.expiresAt > Date.now()) return cachedGroups.groups;
-	const id = await findGroupsFileId(env);
-	let groups: Group[] = [];
-	if (id) {
-		const res = await driveFetch(env, `${DRIVE_API}/files/${encodeURIComponent(id)}?alt=media`);
-		if (res.ok) groups = sanitizeGroups(await res.json().catch(() => [])) ?? [];
-	}
-	cachedGroups = { groups, expiresAt: Date.now() + 30_000 };
-	return groups;
-}
-
-export async function saveGroups(env: Env, groups: Group[]): Promise<Group[]> {
-	const file = new File([JSON.stringify(groups)], GROUPS_FILE, { type: "application/json" });
-	const id = await findGroupsFileId(env);
-	const params = new URLSearchParams({ uploadType: "multipart", fields: "id" });
-	let res: Response;
-	if (id) {
-		const { body, contentType } = multipartBody({}, file);
-		res = await driveFetch(env, `${DRIVE_UPLOAD}/${encodeURIComponent(id)}?${params}`, {
-			method: "PATCH",
-			headers: { "Content-Type": contentType },
-			body,
-		});
-	} else {
-		const { body, contentType } = multipartBody({ name: GROUPS_FILE, parents: [env.DRIVE_FOLDER_ID] }, file);
-		res = await driveFetch(env, `${DRIVE_UPLOAD}?${params}`, {
-			method: "POST",
-			headers: { "Content-Type": contentType },
-			body,
-		});
-	}
-	if (!res.ok) throw new Error(`Drive guardar grupos fallo (${res.status})`);
-	cachedGroups = { groups, expiresAt: Date.now() + 30_000 };
-	return groups;
 }
