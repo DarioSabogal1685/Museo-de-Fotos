@@ -35,6 +35,16 @@ const LONG_PRESS_MS = 500
 const MOVE_TOLERANCE = 10
 const NO_GROUP = '__none__'
 
+/** "hace 5 min", "hace 3 h", "hace 2 días". */
+function timeAgo(at: number): string {
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60_000))
+  if (minutes < 1) return 'hace un momento'
+  if (minutes < 60) return `hace ${minutes} min`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `hace ${hours} h`
+  return `hace ${Math.round(hours / 24)} días`
+}
+
 const hasInfo = (photo: Photo) =>
   Boolean(photo.tags && (photo.tags.place || photo.tags.people.length > 0 || photo.tags.group))
 
@@ -460,30 +470,62 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
         </div>
       )}
 
-      {roomPendings.map((p) => (
-        <div key={p.id} className="pending-banner">
-          <span>⏳ Esperando la versión editada de «{p.name}»</span>
-          <div className="pending-actions">
-            <label className={`btn primary${replacingId === p.id ? ' disabled' : ''}`}>
-              {replacingId === p.id ? 'Subiendo…' : 'Subir editada'}
-              <input
-                type="file"
-                accept="image/*"
-                hidden
-                disabled={replacingId !== null}
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  e.target.value = ''
-                  if (file) applyReplacement(p, file)
-                }}
-              />
-            </label>
-            <button className="btn" disabled={replacingId !== null} onClick={() => setPendings(removePending(p.id))}>
-              Cancelar
-            </button>
-          </div>
-        </div>
-      ))}
+      {/* Espacio fijo de la sala: fotos mandadas a la galeria que esperan su version editada */}
+      <section className="pending-section" aria-label="Fotos por reemplazar">
+        <h3>⏳ Por reemplazar{roomPendings.length > 0 ? ` (${roomPendings.length})` : ''}</h3>
+        {roomPendings.length === 0 ? (
+          <p className="hint pending-empty">
+            No hay fotos por reemplazar. Mantén pulsada una foto y toca «Reemplazar» para editarla fuera de la app.
+          </p>
+        ) : (
+          <>
+            <p className="hint pending-empty">
+              Fotos que mandaste a tu galería para editarlas. Cuando estén listas, sube aquí la versión editada.
+            </p>
+            <div className="pending-list">
+              {roomPendings.map((p) => {
+                const photo = photos.find((x) => x.id === p.id)
+                return (
+                  <div key={p.id} className="pending-card">
+                    {photo ? (
+                      <img src={thumbUrl(photo.id, 160, photo.modifiedTime)} alt={p.name} draggable={false} />
+                    ) : (
+                      <span className="pending-noimg">{loading ? '…' : '?'}</span>
+                    )}
+                    <div className="pending-info">
+                      <strong title={p.name}>{p.name}</strong>
+                      <small>
+                        {photo || loading ? `Enviada ${timeAgo(p.at)}` : 'Esta foto ya no está en la sala (se movió o se borró)'}
+                      </small>
+                      <div className="pending-actions">
+                        {photo && (
+                          <label className={`btn primary${replacingId === p.id ? ' disabled' : ''}`}>
+                            {replacingId === p.id ? 'Subiendo…' : 'Subir editada'}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              hidden
+                              disabled={replacingId !== null}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0]
+                                e.target.value = ''
+                                if (file) applyReplacement(p, file)
+                              }}
+                            />
+                          </label>
+                        )}
+                        <button className="btn" disabled={replacingId !== null} onClick={() => setPendings(removePending(p.id))}>
+                          {photo ? 'Cancelar' : 'Quitar'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </section>
 
       {error && <p className="message error">{error}</p>}
       {loading && <p className="message">Cargando…</p>}
@@ -535,6 +577,7 @@ export default function RoomView({ room, onBack, onRoomUpdated }: Props) {
             <img src={thumbUrl(p.id, 400, p.modifiedTime)} alt={p.name} loading="lazy" draggable={false} />
             {selecting && <span className="card-check">{picked.has(p.id) ? '✓' : ''}</span>}
             {!selecting && room.cover === p.id && <span className="cover-badge">★ Portada</span>}
+            {!selecting && roomPendings.some((x) => x.id === p.id) && <span className="pending-badge">⏳ Por reemplazar</span>}
             {menuId === p.id && (
               <div className="card-actions" data-actions>
                 <button

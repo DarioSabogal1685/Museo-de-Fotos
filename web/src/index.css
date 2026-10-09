@@ -412,3 +412,21 @@ button.menu-update:hover { background: #e2bd4a; }
 .pending-actions { display: flex; gap: .5rem; }
 .btn.disabled { opacity: .6; pointer-events: none; }
 @media (max-width: 600px) { .pending-banner { margin: .75rem; } }
+
+/* --- Espacio "Por reemplazar" de cada sala --- */
+.pending-section { margin: .75rem 1.5rem 0; padding: .7rem .9rem; background: #1d1810; border: 1px solid #4a3f1e; border-radius: 8px; }
+.pending-section h3 { margin: 0; font-size: .95rem; }
+.pending-empty { margin: .3rem 0 0; text-align: left; }
+.pending-list { display: flex; flex-direction: column; gap: .6rem; margin-top: .6rem; }
+.pending-card { display: flex; gap: .75rem; align-items: center; }
+.pending-card img, .pending-noimg { width: 72px; height: 72px; border-radius: 6px; object-fit: cover; flex: none; background: #14110f; }
+.pending-noimg { display: grid; place-items: center; color: var(--muted); }
+.pending-info { display: flex; flex-direction: column; gap: .2rem; min-width: 0; }
+.pending-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-info small { color: var(--muted); }
+.pending-info .pending-actions { margin-top: .2rem; }
+.pending-badge {
+  position: absolute; top: .4rem; right: .4rem; background: #f59e0b; color: #111; font-size: .68rem; font-weight: 700;
+  padding: .15rem .45rem; border-radius: 999px; pointer-events: none;
+}
+@media (max-width: 600px) { .pending-section { margin: .75rem .75rem 0; } }
